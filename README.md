@@ -1,5 +1,8 @@
 # Firmable — cybersecurity sales intelligence
 
+**Start here:** [`WRITEUP.md`](WRITEUP.md) (approach, key decisions, how it was measured). Live app:
+<https://firmable-api-production.up.railway.app>.
+
 > **Public snapshot.** This repository is a single-commit snapshot of the project's private
 > development history. Commit hashes cited in the docs (for example the deployed commit) refer to
 > that history. For the public copy, named organisations in exposure examples, internal NTLM

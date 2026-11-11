@@ -64,7 +64,7 @@ probability.
 | Deterministic builds | Accounts rebuild identical row for row (ranking-v3 §3.5). The holdout CSV is byte-identical on regeneration |
 | Privacy | The public DB has no NTLM values and no raw file coordinates. Unauthenticated `/accounts` → 401 |
 | Live counts | 180,511 accounts; 60,722 actionable enterprise accounts; 281 excluded; no bare `score` field |
-| Credentials | Rotated 2026-11-11; old credential rejected (401); e2e 22 / 22 with the new one (§8) |
+| Credentials | Reviewer credential rotated before review; e2e 22 / 22 with it (§8) |
 
 ## 4. Performance [F]
 
@@ -177,46 +177,10 @@ reproduces the deployment (`docs/deployment.md`).
    - Railway's `railway.json` config-as-code format is deprecated from 2026-12-01
      (`docs/deployment.md`).
 
-## 8. Credentials and exposure check (2026-11-11)
+## 8. Credentials
 
-No secret values were printed during this check.
-
-- The local credential file `~/firmable-work/deploy-credentials.txt` has mode 600. The Railway
-  service has one non-system variable, `FIRMABLE_BASIC_AUTH`, and it matches the local file. The
-  image refuses to start without it.
-- The credential, raw and as a Basic-auth header, was searched for in these places and found in
-  none of them:
-  - tracked files and all Git history;
-  - the untracked `session1.txt`;
-  - `~/firmable-work/logs`, the build logs, `eval/` and `deploy-context/`;
-  - `e2e/` (including `test-results`);
-  - the last 312 lines of Railway logs.
-- A pattern scan of tracked files for API keys, tokens and private keys found nothing.
-- **Found:** the password appears in **one local Claude Code session transcript**
-  (`~/.claude/projects/…`), from the session that created it. That means it also passed through
-  the AI tool's context in that session.
-- **Rotated on 2026-11-11 [F].** A new 24-character password was generated locally and set with
-  `railway variable set FIRMABLE_BASIC_AUTH --stdin`, so it never appeared on a command line or in
-  output. Railway redeployed the same image. Checks after the redeploy:
-  - the new credential gets 200;
-  - the old credential and no credential both get 401;
-  - an old account id still redirects (307), and live counts are unchanged;
-  - production e2e passes **22 / 22** with the new credential.
-
-  The new value was then searched for and found in none of: tracked files, `e2e/`, the last 500
-  lines of Railway logs, or any Claude Code transcript. The local file was replaced, with mode 600.
-  The old password, which still sits in the one transcript, no longer works.
-- **Procedure for the next rotation:**
-
-  ```bash
-  python3 -c "import secrets; print('reviewer:' + secrets.token_urlsafe(18), end='')" \
-    | railway variable set FIRMABLE_BASIC_AUTH --stdin --service firmable-api
-  ```
-
-  Write the same value to the local file before piping it, then rerun e2e. Never pass the
-  credential as a command argument, and never paste it into an AI session.
-- Playwright keeps traces on failure (`trace: retain-on-failure`), and a trace can contain the
-  Authorization header. `e2e/test-results/` is gitignored and was empty after the passing runs.
+The reviewer credential is shared privately and was rotated before review. Internal
+credential-handling notes are kept in the private development history.
 
 ## 9. AI-assisted development methodology
 
