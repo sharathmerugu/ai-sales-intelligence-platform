@@ -1,0 +1,43 @@
+== 1a abstention (tier C) share of exposure services
+n,pct_c
+94162,71.4
+== 1b abstention by registrant class and cloud tag
+org_class,cloud,n,pct_c,pct_a
+isp_telco,false,40337,82.6,0.0
+cloud_hosting,false,27153,70.9,0.0
+cloud_hosting,true,15794,87.4,0.0
+business,false,9612,0.0,100.0
+saas_platform,false,795,56.2,0.0
+unknown,false,242,93.0,0.0
+cdn,false,215,91.2,0.0
+isp_telco,true,7,100.0,0.0
+cdn,true,3,66.7,0.0
+unknown,true,3,100.0,0.0
+business,true,1,0.0,100.0
+== 1c abstention reasons (tier C exposure services)
+reason,n
+abstain_no_customer_evidence,67055
+abstain_ambiguous_domains,147
+shared_hosting,58
+abstain_ntlm_uncorroborated,46
+== 1d what name evidence abstained exposure services carry (upper bound for external fill)
+kind,n
+0 no name at all,18346
+1 certificate CN is an IP,7484
+2 vendor or default certificate,5250
+3 CN is not a domain,29686
+4 domain-like name present,6482
+== 1e observation gap: version visible on exposure-signal hits
+signal_id,n,pct_version_seen
+S01,26847,4.5
+S03,24983,47.8
+S04,9863,28.5
+S05,34822,22.1
+== 1f S01 by vendor: version vs other fingerprints that could stand in for it
+detail,n,pct_version,pct_favicon,pct_jarm,pct_html_hash,distinct_html_hashes
+SonicWall,6991,0.0,94.0,67.6,99.6,3483
+Citrix NetScaler,4583,5.5,29.3,44.3,100.0,2438
+FortiGate,3948,0.4,56.8,86.5,95.3,179
+DrayTek,3245,27.3,58.0,86.2,97.4,1660
+SSL VPN portal (unbranded),2006,1.2,84.1,77.3,100.0,68
+Check Point,1733,0.0,5.7,90.8,98.9,423

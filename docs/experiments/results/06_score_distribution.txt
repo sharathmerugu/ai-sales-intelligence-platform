@@ -1,0 +1,26 @@
+== 6a score distribution, enterprise
+n,distinct_scores,p50,p90,p99,p999,max,pct_ge_36
+179669,7378,7.2,13.4,44.6,75.1,86.4,1.55
+== 6b most common score values (ties)
+score,n
+5.85,23353
+5.625,16235
+10.6875,9982
+5.4,9127
+7.0312,7966
+7.3125,7843
+== 6c peer groups: same score, different percentile
+account_kind,best_tier,n,pct_below_30,pct_below_36,p50,p90,p99
+domain,B,164595,99.6,99.8,7.0,13.0,21.3
+org,A2,7694,80.2,87.7,10.6,38.4,70.8
+org,A1,7380,73.4,78.8,13.8,52.5,78.2
+== 6d illustrative bands cut at whole-population percentiles (not calibrated)
+band,n,min_score,max_score,org_accounts,domain_accounts
+1 hot (top 1%),1804,44.6,86.4,1675,129
+2 warm (top 10%),21035,13.4,44.6,5172,15863
+3 cold,156830,2.2,13.4,8227,148603
+== 6e where pool / customer labels land in those bands (known-negative floor check)
+band,n
+1 hot,56
+2 warm,119
+3 cold,467

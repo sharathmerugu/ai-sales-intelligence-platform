@@ -1,0 +1,8 @@
+== 3a scanner-inferred KEV / CVE presence and version visibility by signal
+signal_id,n,pct_kev,pct_any_cve,pct_version
+S01,26847,0.63,2.81,4.5
+S03,24983,0.71,0.71,47.8
+S04,9863,1.18,4.86,28.5
+S05,34822,3.18,8.0,22.1
+S06,217167,11.81,16.46,26.8
+S16,1522410,0.6,0.98,8.3

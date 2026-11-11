@@ -1,0 +1,19 @@
+== 4a attributed services with a signal, by tier and deciding reason code
+tier,reason,n
+A1,org_not_provider,56966
+A2,org_not_provider,27377
+B,dom_sni,199093
+B,dom_cert_sni_agree,166396
+B,dom_cert,94057
+B,dom_cert_san,48596
+B,dom_hostname_only,23699
+B,dom_cert_wildcard,18444
+B,dom_cert_wildcard_sni_agree,7018
+B,dom_ntlm_corroborated,552
+B,dom_http_host,289
+== 4b tier-B services by evidence family behind the winning domain
+family,n,pct
+certificate (CT-visible),334511,59.9
+SNI / Host only,199382,35.7
+reverse DNS hostname only,23699,4.2
+NTLM + public name,552,0.1

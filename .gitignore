@@ -1,0 +1,52 @@
+# Raw scan data and derived artifacts. Raw observations contain real IPs and
+# hostnames; large working artifacts belong in ~/firmable-work/.
+*.jsonl
+*.ndjson
+*.json.gz
+*.jsonl.gz
+*.parquet
+*.duckdb
+*.duckdb.wal
+*.db
+*.sqlite
+*.arrow
+*.feather
+firmable_dataset
+data/
+work/
+# Review and holdout sets: real names, domains and IPs (they belong in ~/firmable-work/eval)
+*-holdout*.csv
+*.blind.csv
+*-review*.csv
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node / web
+node_modules/
+.next/
+.vercel/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Sanitized test fixtures (documentation IPs, placeholder names) are safe to commit
+!tests/fixtures/*.jsonl

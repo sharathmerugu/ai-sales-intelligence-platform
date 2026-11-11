@@ -1,0 +1,24 @@
+== 2a prevalence of counted signals across enterprise accounts; self_info = -ln(share)
+signal_id,n,pct,self_info
+S01,2408,1.34,4.31
+S03,1371,0.76,4.88
+S04,454,0.25,5.98
+S05,2026,1.13,4.49
+S06,76157,42.39,0.86
+S16,116200,64.67,0.44
+== 2b phi correlation between counted-signal indicators, all enterprise accounts
+s01_s03,s01_s04,s01_s05,s03_s04,s03_s05,s04_s05,s01_s06,s05_s06,s01_s16,s06_s16
+0.057,0.042,0.06,0.141,0.113,0.112,0.034,0.014,-0.027,-0.806
+== 2c same, accounts with >= 2 counted signals
+n,s01_s03,s01_s16,s05_s06,s06_s16
+17226,0.05,-0.279,-0.129,0.014
+== 2d S06 / S16 overlap by account kind
+account_kind,n,with_s06,with_s16,with_both
+domain,164595,67435,109522,12827
+org,15074,8722,6678,2208
+== 2e known-class placement by account-name pattern (crude regex classes, not labels)
+name_class,n,median_rank,in_top100,in_top1000
+bank or health (likely enterprise),2051,64423.0,0,47
+other,175278,90726.0,68,797
+pool or customer label (known-negative),642,64960.0,4,37
+university (likely enterprise),1698,54130.0,28,119

@@ -1,0 +1,267 @@
+{
+  "format_version": 1,
+  "edition": "core",
+  "build_id": "2026-10-18T08:03:28Z",
+  "files": [
+    {
+      "name": "openasn-ipv4.bin",
+      "sha256": "f2d69beac5d505b29b9b5076a08c26e00a973a3d47d115700e2ceaa04702390a",
+      "bytes": 5900846,
+      "records": 401301
+    },
+    {
+      "name": "openasn-ipv6.bin",
+      "sha256": "f7a35fea7de47ddb1207b1c6ada9712f5aeb666ad2c239104943548a88205313",
+      "bytes": 3591754,
+      "records": 94519
+    },
+    {
+      "name": "openasn-orgs.bin",
+      "sha256": "171470c4d301aa747d5b125e84d2f9fd749c8d975743d982ce69c24f58e3a32e",
+      "bytes": 80729,
+      "records": 3223
+    },
+    {
+      "name": "asn-categories.csv",
+      "sha256": "28c49e4302669bc48e4b7dcd4bc5399919edb2e47c770e8443fa634c679e5419",
+      "bytes": 3054541,
+      "records": 119322
+    },
+    {
+      "name": "fetch-manifest.json",
+      "sha256": "77bb52ec426056ef6d3015fc94e95d43c8a73ab9343b15c7a838410d9a9a91cc",
+      "bytes": 77726,
+      "records": 0
+    },
+    {
+      "name": "ATTRIBUTION.md",
+      "sha256": "b037faf14a5a1f5af5b01da5c9926f385af23a622c8a00e5480f0b438f87f8c8",
+      "bytes": 6799,
+      "records": 0
+    },
+    {
+      "name": "openasn.csv.gz",
+      "sha256": "edc0882ab9a15b27eeb18941d9cfb3ff18456b09bf213c2e719bcd1549a3683a",
+      "bytes": 5363809,
+      "records": 496044,
+      "export": {
+        "format": "csv",
+        "media_type": "text/csv; charset=utf-8",
+        "content_encoding": "gzip",
+        "schema_version": 1,
+        "schema_revision": 0,
+        "classification_profile": "core-v1",
+        "lookup_policy_version": 1,
+        "scope": "tier_a",
+        "tier_b_included": false,
+        "records_by_family": {
+          "ipv4": 401525,
+          "ipv6": 94519
+        },
+        "uncompressed": {
+          "name": "openasn.csv",
+          "bytes": 52836266,
+          "sha256": "7cb81c7a4b9ba265757340b1e7e2840fc8d692c952b7207f79472624e93c16f0"
+        }
+      }
+    },
+    {
+      "name": "openasn.sqlite.gz",
+      "sha256": "6dba5215ef9ab7ed13e4eb205f2e76c9625e254d3c62dbedf06c216029775a58",
+      "bytes": 7172418,
+      "records": 496044,
+      "export": {
+        "format": "sqlite",
+        "media_type": "application/vnd.sqlite3",
+        "content_encoding": "gzip",
+        "schema_version": 1,
+        "schema_revision": 0,
+        "classification_profile": "core-v1",
+        "lookup_policy_version": 1,
+        "scope": "tier_a",
+        "tier_b_included": false,
+        "records_by_family": {
+          "ipv4": 401525,
+          "ipv6": 94519
+        },
+        "uncompressed": {
+          "name": "openasn.sqlite",
+          "bytes": 44388352,
+          "sha256": "4348dd7311abaadf3f43ea430618cf37cd6fca50f3779049396e6117a641c172"
+        }
+      }
+    },
+    {
+      "name": "openasn.mmdb",
+      "sha256": "a815a171097dbd8053c2776a03bd6fafe9416426baf5c23d408ef099b63f1885",
+      "bytes": 12933297,
+      "records": 496044,
+      "export": {
+        "format": "mmdb",
+        "media_type": "application/octet-stream",
+        "content_encoding": "identity",
+        "schema_version": 1,
+        "schema_revision": 0,
+        "classification_profile": "core-v1",
+        "lookup_policy_version": 1,
+        "scope": "tier_a",
+        "tier_b_included": false,
+        "records_by_family": {
+          "ipv4": 401525,
+          "ipv6": 94519
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "id": "routeviews",
+      "url": "https://www.routeviews.org/",
+      "license": "CC-BY-4.0",
+      "license_sha256": "0887cbd21eab3dce8a4765ca0a11c862827091d062d4a40eec9378ffc1f2c2a9",
+      "fetched_at": "2026-10-18T08:01:00Z"
+    },
+    {
+      "id": "ipverse-as-metadata",
+      "url": "https://github.com/ipverse/as-metadata",
+      "license": "CC0-1.0",
+      "license_sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+      "fetched_at": "2026-10-18T08:03:17Z"
+    },
+    {
+      "id": "ipverse-as-ip-blocks",
+      "url": "https://github.com/ipverse/as-ip-blocks",
+      "license": "CC0-1.0",
+      "license_sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+      "fetched_at": null
+    },
+    {
+      "id": "x4bnet-lists_vpn",
+      "url": "https://github.com/X4BNet/lists_vpn",
+      "license": "MIT",
+      "license_sha256": "8826b5fbb9d7380264deb636df4adf349eab0e640ca3f2f5481d74cea96ba7a5",
+      "fetched_at": "2026-09-13T08:17:58Z"
+    },
+    {
+      "id": "brianhama-bad-asn-list",
+      "url": "https://github.com/brianhama/bad-asn-list",
+      "license": "MIT",
+      "license_sha256": "67690d0688b2b17b2fb74446e0bf58132a389b2e543d9ba0c4c44a60fedd4e67",
+      "fetched_at": "2026-07-04T21:58:31Z"
+    },
+    {
+      "id": "wikidata-p3797",
+      "url": "https://www.wikidata.org/wiki/Property:P3797",
+      "license": "CC0-1.0",
+      "license_sha256": "a6c536658d81a4e11e73451e4ff309169a09a319a6a54993bc1cd306d8c2002f",
+      "fetched_at": "2026-10-18T08:03:20Z"
+    },
+    {
+      "id": "openasn-overrides",
+      "url": "https://github.com/openasn/openasn",
+      "license": "CC0-1.0",
+      "license_sha256": null,
+      "fetched_at": "2026-10-18T08:03:28Z"
+    }
+  ],
+  "stats": {
+    "layer_counts": {
+      "base_ipv4": 401301,
+      "vpn_ipv4": 4806,
+      "dc_ipv4": 30519,
+      "base_ipv6": 94519
+    },
+    "export_counts": {
+      "mode": "all",
+      "records_ipv4": 401525,
+      "records_ipv6": 94519,
+      "records_total": 496044,
+      "formats": {
+        "csv": {
+          "bytes": 5363809,
+          "uncompressed_bytes": 52836266
+        },
+        "sqlite": {
+          "bytes": 7172418,
+          "uncompressed_bytes": 44388352
+        },
+        "mmdb": {
+          "bytes": 12933297
+        }
+      }
+    },
+    "hosting_asns": 11745,
+    "reference_dc_asns": 944,
+    "reference_coverage": 0.8941,
+    "org_names": 3223,
+    "org_names_by_source": {
+      "override": 2730,
+      "wikidata": 493
+    },
+    "wikidata_p3797": {
+      "statements": 1860,
+      "restricted_refs_only": 1273,
+      "ended": 1,
+      "deprecated": 6,
+      "conflict": 3,
+      "no_label": 5,
+      "admitted_asns": 568
+    },
+    "countries": 2579,
+    "countries_by_source": {
+      "override": 2181,
+      "wikidata": 398
+    },
+    "wikidata_countries": {
+      "statements": 1290,
+      "deprecated": 8,
+      "ended": 18,
+      "restricted_refs_only": 3,
+      "ambiguous_P17": 8,
+      "ambiguous_P159": 1,
+      "sar": 2,
+      "items_with_country": 697
+    },
+    "backbone": "routeviews",
+    "routeviews": {
+      "rib_slot_utc": "20261018.0400",
+      "collectors": [
+        "route-views2",
+        "route-views.eqix",
+        "route-views.linx",
+        "decix.fra",
+        "route-views.napafrica",
+        "route-views.sg",
+        "route-views.sydney",
+        "ix-br.gru",
+        "route-views.wide",
+        "route-views6"
+      ],
+      "peer_ases": 187,
+      "prefixes_kept": 1416952,
+      "min_peers": 2
+    }
+  },
+  "signature": null,
+  "export_producer": {
+    "exporter_version": "1.0.0",
+    "mode": "all",
+    "schema_version": 1,
+    "schema_revision": 0,
+    "classification_profile": "core-v1",
+    "lookup_policy_version": 1,
+    "data_repo_commit": "67f2ab7b61236874aa67a285ed8f03a799074332",
+    "pipeline_repo_commit": "ab4663619943abcd87efd6a11b9a242afaab25df",
+    "working_tree_dirty": false,
+    "tools": {
+      "go": "go1.24.0",
+      "mmdbwriter": "v1.2.0",
+      "python": "3.12.15",
+      "python_command": "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "python_path": "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "ruby": "3.4.11",
+      "sqlite": "3.45.1",
+      "zlib": "1.3"
+    }
+  }
+}

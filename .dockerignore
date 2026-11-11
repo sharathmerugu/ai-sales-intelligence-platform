@@ -1,0 +1,9 @@
+# Only what the image needs: pyproject, uv.lock, README, src/, deploy/.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!deploy/
+**/__pycache__
+**/*.pyc

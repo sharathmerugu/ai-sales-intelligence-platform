@@ -1,0 +1,7 @@
+enterprise accounts: 179669; recomputed baseline matches accounts.parquet rank on 994/1000 of the top 1000
+random weights x U(0.5, 1.5), 30 runs          top40 mean 0.61 min 0.40  top100 mean 0.67 min 0.48  top1000 mean 0.85 min 0.69
+self-information weights: {'S01': 0.577, 'S03': 0.652, 'S04': 0.8, 'S05': 0.6, 'S06': 0.115, 'S16': 0.058}
+self-information (inverse-frequency) weights   top40 0.57  top100 0.68  top1000 0.78
+equal weights 0.5                              top40 0.85  top100 0.87  top1000 0.78
+S01 and S03 weights swapped                    top40 0.82  top100 0.87  top1000 0.91
+bootstrap services within account, 20 runs     top40 mean 0.68 min 0.57  top100 mean 0.72 min 0.66  top1000 mean 0.81 min 0.79

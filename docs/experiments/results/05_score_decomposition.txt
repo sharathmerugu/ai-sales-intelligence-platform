@@ -1,0 +1,19 @@
+== 5a variance of ln(component), enterprise accounts with score > 0
+n,v_relevance,v_strength,v_attribution,v_evidence,v_score
+179669,0.071,0.027,0.101,0.001,0.267
+== 5b same, enterprise top 1000
+n,v_relevance,v_strength,v_attribution,v_evidence,v_score
+1000,0.006,0.011,0.002,0.002,0.015
+== 5c Spearman-style rank correlation of score with each component (all enterprise)
+relevance,strength,attribution,evidence
+0.587,0.584,0.749,0.204
+== 5d accounts scoring 25-30, by what drives the score
+profile,n,mean_relevance,mean_attribution
+other,969,0.62,0.85
+"weak signal, strong attribution",292,0.4,0.89
+"strong exposure, weak attribution",2,0.84,0.42
+== 5e kind and tier mix of the enterprise top 1000
+account_kind,best_tier,n
+org,A1,665
+org,A2,301
+domain,B,34

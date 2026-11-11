@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account Signals</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #fff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc;
+  --accent: #2f5bd3; --accent-soft: #e8eefc; --fact: #1f7a4d; --risk: #a35a00; --hyp: #6b4bb8;
+  --bar: #2f5bd3; --bar-bg: #e6e6e1;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #a09f98; --line: #34342f;
+    --accent: #8aa8ff; --accent-soft: #252c40; --fact: #6fcf9b; --risk: #f0b25a; --hyp: #b9a2f0;
+    --bar: #8aa8ff; --bar-bg: #34342f;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { padding: 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+h1 { font-size: 18px; margin: 0 0 4px; }
+.note { color: var(--muted); font-size: 12.5px; margin: 0; }
+main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; padding: 16px; }
+@media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-bottom: 8px; }
+label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 2px; }
+input[type=search], input[type=text], input[type=number] {
+  font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--text); min-width: 0; }
+input[type=search] { width: 220px; max-width: 100%; }
+input[type=number] { width: 80px; }
+fieldset { border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; margin: 0; font-size: 12px; }
+legend { color: var(--muted); padding: 0 4px; }
+fieldset label { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; margin-right: 8px; color: var(--text); }
+button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--accent);
+  background: var(--accent); color: #fff; cursor: pointer; }
+button.secondary { background: transparent; color: var(--accent); }
+button:disabled { opacity: .4; cursor: default; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr { cursor: pointer; }
+tbody tr:hover, tbody tr.selected { background: var(--accent-soft); }
+.comp { display: inline-block; width: 44px; height: 6px; background: var(--bar-bg); border-radius: 3px; vertical-align: middle; }
+.comp > i { display: block; height: 100%; background: var(--bar); border-radius: 3px; }
+@media (max-width: 600px) { .c-comp { display: none; } }
+.chip { display: inline-block; font-size: 11.5px; padding: 1px 6px; border-radius: 10px;
+  border: 1px solid var(--line); margin: 1px 2px 1px 0; white-space: nowrap; }
+.pager { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; color: var(--muted); }
+h2 { font-size: 16px; margin: 0 0 4px; }
+h3 { font-size: 13px; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.disclaimer { border-left: 3px solid var(--risk); padding: 6px 10px; background: var(--bg); font-size: 12.5px; margin: 8px 0; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; }
+.card { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.stmt { margin: 4px 0; }
+.stmt b { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-right: 6px; }
+.fact b { color: var(--fact); } .risk b { color: var(--risk); } .hyp b { color: var(--hyp); }
+.hyp span { font-style: italic; }
+.muted { color: var(--muted); font-size: 12.5px; }
+.suppressed { color: var(--muted); font-size: 12px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+code { font-size: 12px; word-break: break-all; }
+.empty { color: var(--muted); padding: 24px 0; text-align: center; }
+.band { font-weight: 600; } .band-High { color: var(--risk); } .band-Medium { color: var(--accent); } .band-Low { color: var(--muted); }
+.own-low { color: var(--risk); } .status { font-size: 12px; color: var(--muted); }
+.card .chip { white-space: normal; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cybersecurity account signals</h1>
+  <p class="note" id="snapshot">Loading…</p>
+  <p class="note">Priority is a relative band and percentile among eligible accounts in this snapshot, not a purchase probability, a confirmed vulnerability or a loss estimate. Ownership confidence is shown separately and is inferred.</p>
+</header>
+<main>
+  <section aria-label="Accounts">
+    <form id="filters">
+      <label>Segment <select name="segment" aria-label="Segment">
+        <option value="enterprise" selected>Enterprise prospects</option>
+        <option value="network_provider">Network providers (ISP, hosting, CDN)</option>
+      </select></label>
+      <label>Search <input type="search" name="q" placeholder="name, domain, product"></label>
+      <label>Country <input type="text" name="country" placeholder="AU, NZ" size="8"></label>
+      <label>View <select name="view" aria-label="View">
+        <option value="actionable" selected>Actionable outreach</option>
+        <option value="review">Needs review</option>
+        <option value="excluded">Excluded (not a prospect)</option>
+        <option value="all">All</option>
+      </select></label>
+      <label>Min priority <input type="number" name="min_priority" min="0" max="100" step="1"></label>
+      <fieldset><legend>Priority band (any of)</legend>
+        <label><input type="checkbox" name="band" value="High">High</label>
+        <label><input type="checkbox" name="band" value="Medium">Medium</label>
+        <label><input type="checkbox" name="band" value="Low">Low</label>
+      </fieldset>
+      <fieldset><legend>Ownership (any of)</legend>
+        <label><input type="checkbox" name="ownership" value="high">high</label>
+        <label><input type="checkbox" name="ownership" value="medium">medium</label>
+        <label><input type="checkbox" name="ownership" value="low">low</label>
+      </fieldset>
+      <fieldset id="signal-box"><legend>Signals (all of)</legend></fieldset>
+      <fieldset><legend>Tier (any of)</legend>
+        <label><input type="checkbox" name="tier" value="A1">A1</label>
+        <label><input type="checkbox" name="tier" value="A2">A2</label>
+        <label><input type="checkbox" name="tier" value="B">B</label>
+        <label><input type="checkbox" name="tier" value="P">P</label>
+      </fieldset>
+      <button type="submit">Search</button>
+    </form>
+    <p class="muted" id="rank-note"># is the priority rank among all eligible accounts. Gaps in the outreach list are accounts held for review (low ownership, review flags, or no security observation).</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th class="num" title="priority rank among eligible accounts">#</th><th>Account</th>
+          <th title="relative priority band and percentile among eligible accounts">Priority</th>
+          <th title="how strongly scan records tie the services to this account">Ownership</th>
+          <th class="c-comp" title="match basis of the counted observations">Evidence</th>
+          <th>Top signals</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="pager">
+      <button class="secondary" id="prev" type="button">Previous</button>
+      <span id="count"></span>
+      <button class="secondary" id="next" type="button">Next</button>
+    </div>
+  </section>
+  <section aria-label="Account detail" id="detail">
+    <p class="empty">Select an account to see why it ranks where it does and the evidence behind it.</p>
+  </section>
+</main>
+<script>
+"use strict";
+const PAGE = 50;
+const state = { offset: 0, total: 0, signals: {}, selected: null };
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") n.className = v; else if (k === "title") n.title = v; else n.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined) continue;
+    n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return n;
+}
+const fmt = (x, d = 2) => (x === null || x === undefined ? "—" : Number(x).toFixed(d));
+const bar = (x) => el("span", { class: "comp", title: fmt(x) }, el("i", { style: `width:${Math.round(100 * (x || 0))}%` }));
+const chips = (xs) => (xs || []).map((x) => el("span", { class: "chip" }, x));
+const signalName = (id) => (state.signals[id] ? `${id} ${state.signals[id].name}` : id);
+const pctText = (p) => (p.percentile === null || p.percentile === undefined ? "not ranked" : `above ${p.percentile}%`);
+const bandEl = (p) => el("span", { class: `band band-${p.band || "none"}` }, p.band || "Excluded");
+const BLOCKER = { excluded: "excluded", ownership_low: "ownership not corroborated", review_flags: "review flags",
+                  no_security_observation: "no security observation" };
+const status = (a) => (a.actionable ? "actionable"
+  : a.eligibility.status === "excluded" ? "excluded: not a prospect (" + (a.eligibility.reasons || []).join(", ") + ")"
+  : "review: " + a.actionable_blockers.map((b) => BLOCKER[b] || b).join(", "));
+
+async function getJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+function query() {
+  const f = document.getElementById("filters");
+  const p = new URLSearchParams();
+  p.set("segment", f.segment.value);
+  const q = f.q.value.trim(); if (q) p.set("q", q);
+  for (const c of f.country.value.split(/[\s,]+/).filter(Boolean)) p.append("country", c.toUpperCase());
+  p.set("view", f.view.value);
+  if (f.min_priority.value !== "") p.set("min_priority", f.min_priority.value);
+  for (const box of f.querySelectorAll("input[name=band]:checked")) p.append("band", box.value);
+  for (const box of f.querySelectorAll("input[name=ownership]:checked")) p.append("ownership", box.value);
+  for (const box of f.querySelectorAll("input[name=signal]:checked")) p.append("signal", box.value);
+  for (const box of f.querySelectorAll("input[name=tier]:checked")) p.append("tier", box.value);
+  p.set("limit", PAGE); p.set("offset", state.offset);
+  return p;
+}
+
+async function loadAccounts() {
+  const tbody = document.getElementById("rows");
+  let body;
+  try { body = await getJSON(`/accounts?${query()}`); }
+  catch (e) { tbody.replaceChildren(el("tr", {}, el("td", { colspan: 6, class: "empty" }, `Error: ${e.message}`))); return; }
+  state.total = body.total;
+  tbody.replaceChildren(...body.items.map((a) => {
+    const tr = el("tr", {},
+      el("td", { class: "num" }, a.rank ?? "—"),
+      el("td", {}, a.account_name || a.account_id, el("div", { class: "muted acct-id" }, a.account_id),
+        el("div", { class: "status" }, status(a))),
+      el("td", {}, bandEl(a.priority), el("div", { class: "muted" }, pctText(a.priority))),
+      el("td", { class: a.ownership.confidence === "low" ? "own-low" : "" }, a.ownership.confidence,
+        el("div", { class: "muted" }, `tier ${a.best_tier}`)),
+      el("td", { class: "c-comp" }, a.evidence.quality),
+      el("td", {}, chips(a.top_signals.map((s) => s.signal_id))));
+    if (a.account_id === state.selected) tr.classList.add("selected");
+    tr.addEventListener("click", () => { location.hash = "account=" + encodeURIComponent(a.account_id); });
+    return tr;
+  }));
+  if (!body.items.length) tbody.replaceChildren(el("tr", {}, el("td", { colspan: 6, class: "empty" }, "No accounts match these filters.")));
+  const end = Math.min(state.offset + body.items.length, state.total);
+  document.getElementById("count").textContent = state.total ? `${state.offset + 1}–${end} of ${state.total}` : "0 accounts";
+  document.getElementById("prev").disabled = state.offset === 0;
+  document.getElementById("next").disabled = end >= state.total;
+}
+
+function statement(cls, label, text) {
+  return el("p", { class: `stmt ${cls}` }, el("b", {}, label), el("span", {}, text || "—"));
+}
+
+function evidenceCard(e) {
+  const s = e.service;
+  const p = e.provenance;
+  return el("div", { class: "card" },
+    el("div", {}, el("span", { class: "chip" }, signalName(e.signal_id)), " ",
+      el("span", { class: "muted" }, `tier ${e.tier}, attribution ${fmt(e.attribution_confidence)}, match on ${e.match_basis || "—"}`)),
+    statement("fact", "Observed fact", e.observed_fact),
+    statement("risk", "Inferred risk", e.inferred_risk),
+    statement("hyp", "Hypothesis", e.hypothesis),
+    e.counted ? null : el("p", { class: "suppressed" },
+      e.suppressed_by ? `Not counted twice: correlated with ${signalName(e.suppressed_by)} on the same service.`
+                      : "Not counted in the priority (correlated duplicate on the same service)."),
+    el("details", {}, el("summary", {}, "Service and provenance"),
+      el("dl", { class: "kv" },
+        el("dt", {}, "Service"), el("dd", {}, `${s.ip}:${s.port}/${s.transport}${s.sni ? " SNI " + s.sni : ""}`),
+        el("dt", {}, "Observed"), el("dd", {}, s.observed_at || "—"),
+        el("dt", {}, "Product"), el("dd", {}, [s.product, s.version].filter(Boolean).join(" ") || "—"),
+        el("dt", {}, "Probe"), el("dd", {}, s.module || "—"),
+        el("dt", {}, "Flags"), el("dd", {}, (e.sub_flags || []).join(", ") || "—"),
+        el("dt", {}, "Attribution"), el("dd", {}, [(e.attribution_reasons || []).join(", "), (e.attribution_domains || []).join(", ")].filter(Boolean).join(" · ") || "—"),
+        el("dt", {}, "Observation"), el("dd", {}, el("code", {}, p.observation_id)),
+        el("dt", {}, "Record"), el("dd", {}, p.file_id ? el("code", {}, `file ${p.file_id} @ ${p.byte_offset} +${p.byte_length}`)
+                                                        : "raw file location withheld in this deployment (traceable internally by observation and SHA-256)"),
+        el("dt", {}, "SHA-256"), el("dd", {}, el("code", {}, p.record_sha256)))));
+}
+
+async function loadEvidence(id, box, offset) {
+  const url = `/accounts/${encodeURIComponent(id)}/evidence?limit=${PAGE}&offset=${offset}`;
+  const body = await getJSON(url);
+  box.querySelector(".more")?.remove();
+  box.append(...body.items.map(evidenceCard));
+  const shown = offset + body.items.length;
+  if (shown < body.total) {
+    const more = el("button", { class: "secondary more", type: "button" }, `Show more (${body.total - shown} left)`);
+    more.addEventListener("click", () => loadEvidence(id, box, shown));
+    box.append(more);
+  }
+  if (!body.total) box.append(el("p", { class: "muted" }, "No evidence rows."));
+}
+
+async function showAccount(id) {
+  state.selected = id;
+  for (const tr of document.querySelectorAll("#rows tr")) tr.classList.toggle("selected", tr.querySelector(".acct-id")?.textContent === id);
+  const panel = document.getElementById("detail");
+  panel.replaceChildren(el("p", { class: "muted" }, "Loading…"));
+  let a;
+  try { a = await getJSON(`/accounts/${encodeURIComponent(id)}`); }
+  catch (e) { panel.replaceChildren(el("p", { class: "empty" }, `Could not load account: ${e.message}`)); return; }
+  const pr = a.priority, own = a.ownership;
+  const evidenceBox = el("div", {});
+  panel.replaceChildren(
+    el("h2", {}, a.account_name || a.account_id),
+    el("div", { class: "muted" }, `${a.account_id} · ${a.segment === "network_provider" ? "network provider" : "enterprise"} · ${a.account_kind} · best tier ${a.best_tier} · ${a.n_services} services on ${a.n_ips} IPs · ${(a.countries || []).join(", ")}`),
+    el("p", { class: "disclaimer" }, a.disclaimer),
+    el("dl", { class: "kv" },
+      el("dt", {}, "Priority"), el("dd", {}, bandEl(pr), ` · ${pctText(pr)} of ${pr.population || "accounts"}`,
+        a.rank ? ` · #${a.rank}` : ""),
+      el("dt", {}, "Why act"), el("dd", {}, `relevance ${fmt(pr.product_relevance)} × breadth ${fmt(pr.signal_strength)} = ${fmt(pr.value, 1)}`),
+      el("dt", {}, "Ownership"), el("dd", { class: own.confidence === "low" ? "own-low" : "" },
+        `${own.confidence} · tier ${own.best_tier} · ${(own.reasons || []).join(", ")}`),
+      el("dt", {}, "Review flags"), el("dd", {}, (own.review_flags || []).join(", ") || "none"),
+      el("dt", {}, "Evidence quality"), el("dd", {}, `${a.evidence.quality} (mean match basis ${fmt(a.evidence.mean_basis_quality)})`),
+      el("dt", {}, "Eligibility"), el("dd", {}, [a.eligibility.status, ...(a.eligibility.reasons || [])].join(", ")),
+      el("dt", {}, "Outreach"), el("dd", {}, status(a))),
+    el("p", { class: "muted" }, pr.note),
+    el("details", {}, el("summary", {}, "Legacy v2 score (comparison only)"),
+      el("p", { class: "muted" }, `${fmt(a.legacy.score, 1)} · legacy rank #${a.legacy.rank} · ${a.legacy.note}`)),
+    el("h3", {}, "Why this priority"),
+    el("ul", {}, (a.explanation || []).map((x) => el("li", {}, x))),
+    el("h3", {}, "Signals"),
+    el("div", {}, a.signals.length ? a.signals.map((s) => el("div", { class: "card" },
+      el("div", {}, el("b", {}, signalName(s.signal_id)), " ",
+        el("span", { class: "muted" }, `${s.n_services} services, ${s.n_ips} IPs, ${s.n_counted_services} counted · ${(s.details || []).join(", ")}${(s.sub_flags || []).length ? " · " + s.sub_flags.join(", ") : ""}`)),
+      statement("risk", "Inferred risk", s.inferred_risk),
+      statement("hyp", "Hypothesis", s.hypothesis))) : el("p", { class: "muted" }, "No per-signal summary.")),
+    el("h3", {}, "Evidence"),
+    evidenceBox);
+  try { await loadEvidence(id, evidenceBox, 0); }
+  catch (e) { evidenceBox.append(el("p", { class: "muted" }, `Could not load evidence: ${e.message}`)); }
+  if (window.matchMedia("(max-width: 900px)").matches) panel.scrollIntoView({ behavior: "smooth" });
+}
+
+function fromHash() {
+  const m = location.hash.match(/^#account=(.+)$/);
+  if (m) showAccount(decodeURIComponent(m[1]));
+}
+
+async function init() {
+  try {
+    const h = await getJSON("/health");
+    document.getElementById("snapshot").textContent = `Snapshot ${h.snapshot_id || "unknown"} · ${h.n_accounts} accounts · observations from one crawl, not a history`;
+    const reg = await getJSON("/signals");
+    const box = document.getElementById("signal-box");
+    for (const s of reg.signals) {
+      state.signals[s.id] = s;
+      box.append(el("label", { title: s.name }, el("input", { type: "checkbox", name: "signal", value: s.id }), s.id));
+    }
+  } catch (e) { document.getElementById("snapshot").textContent = `API unavailable: ${e.message}`; }
+  document.getElementById("filters").addEventListener("submit", (ev) => { ev.preventDefault(); state.offset = 0; loadAccounts(); });
+  document.getElementById("filters").segment.addEventListener("change", () => { state.offset = 0; loadAccounts(); });
+  document.getElementById("filters").view.addEventListener("change", () => { state.offset = 0; loadAccounts(); });
+  document.getElementById("prev").addEventListener("click", () => { state.offset = Math.max(0, state.offset - PAGE); loadAccounts(); });
+  document.getElementById("next").addEventListener("click", () => { state.offset += PAGE; loadAccounts(); });
+  window.addEventListener("hashchange", fromHash);
+  await loadAccounts();
+  fromHash();
+}
+init();
+</script>
+</body>
+</html>
