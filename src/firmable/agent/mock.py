@@ -146,6 +146,8 @@ class HeuristicModel:
             decision = "Monitor this account: no security finding is linked to it."
         elif playbook["lens_signals"] and not lens_lead:
             decision = f"No {offering} finding here; lead with the {lead['name'].lower()}."
+        elif not playbook["lens_signals"]:
+            decision = f"Lead with the {lead['name'].lower()}: the strongest finding on this account."
         else:
             decision = (f"Lead with {offering}: {_n(lead['n_services'], 'exposed service')} "
                         f"{'gives' if lead['n_services'] == 1 else 'give'} you the opening.")

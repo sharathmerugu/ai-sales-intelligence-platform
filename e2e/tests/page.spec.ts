@@ -94,3 +94,31 @@ test("pagination moves to the next page", async ({ page }) => {
   const first = Number(await page.locator("#rows tr").first().locator("td").first().textContent());
   expect(first).toBeGreaterThanOrEqual(51);
 });
+
+// Signal brief (docs/agentic-briefs.md): decision, finding / relevance / action cards, evidence drawer and
+// follow-ups. Works with or without a model: without one the page shows the factual brief in the same shape.
+test("an account opens with a decision, signal cards and cited evidence", async ({ page }) => {
+  await page.getByLabel("Prospecting lens").selectOption("remote_access");
+  await page.locator("#rows tr").first().click();
+  const brief = page.locator("#ai-brief");
+  await expect(brief.locator(".decision")).toBeVisible();
+  const card = brief.locator(".sig-card").first();
+  await expect(card).toContainText("Found");
+  await expect(card).toContainText("Why it matters");
+  await expect(card).toContainText("Next");
+  await expect(card.locator(".sig-meta")).toContainText("Ownership:");
+  await expect(card.locator(".sig-meta")).toContainText("Observed");
+  expect(await brief.innerText()).not.toMatch(/\bS\d\d\b/);
+  await card.getByRole("button", { name: /Evidence/ }).click();
+  await expect(page.locator("#drawer")).toBeVisible();
+  await expect(page.locator("#drawer-body .card").first()).toContainText("Observed");
+  await page.locator("#drawer-close").click();
+  await expect(page.locator("#drawer")).toBeHidden();
+  await expect(brief.locator(".followups")).toBeVisible();
+});
+
+test("the certificate lens leads with certificate findings", async ({ page }) => {
+  await page.getByLabel("Prospecting lens").selectOption("certificate_management");
+  await page.locator("#rows tr").first().click();
+  await expect(page.locator("#ai-brief .sig-card").first()).toContainText(/certificate|TLS/i);
+});

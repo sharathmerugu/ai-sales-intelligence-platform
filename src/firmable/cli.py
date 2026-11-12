@@ -17,6 +17,8 @@
     firmable inspect-accounts SNAPSHOT [--account ID ...] [--segment S] [--top 40] [--n 8]
     firmable holdout-set SNAPSHOT [--seed N] [--out CSV] [--attribution-version N] [--overwrite]
     firmable holdout-metrics CSV [--labels BLIND_CSV]   # scoring-v3 holdout (docs/evaluation.md)
+    firmable agent-brief SNAPSHOT ACCOUNT_ID [--use-case U] [--question Q] [--provider mock|anthropic]
+    firmable agent-eval SNAPSHOT [--provider mock|anthropic] [--max-cost USD] [--out DIR]   # docs/agentic-briefs.md
 """
 
 from __future__ import annotations
@@ -108,6 +110,24 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("holdout-metrics", help="metrics from manual labels on a holdout CSV")
     p.add_argument("csv", type=Path)
     p.add_argument("--labels", type=Path, default=None, help="labeled blind CSV; labels are joined by case_id")
+
+    for name, help_ in (("agent-brief", "run the interpretation agent on one account (synchronous)"),
+                        ("agent-eval", "evaluate agent briefs against the deterministic briefs")):
+        p = sub.add_parser(name, help=help_)
+        p.add_argument("snapshot")
+        if name == "agent-brief":
+            p.add_argument("account_id")
+            p.add_argument("--use-case", default=None)
+            p.add_argument("--question", default=None, help="ask a follow-up instead of building a brief")
+            p.add_argument("--signal", default=None, help="focus finding for --question")
+            p.add_argument("--trace", action="store_true")
+        else:
+            p.add_argument("--max-cost", type=float, default=None, help="stop starting runs past this USD total")
+            p.add_argument("--out", type=Path, default=None, help="default <workdir>/eval/SNAPSHOT-agent-<provider>-<time>")
+        p.add_argument("--provider", choices=["mock", "anthropic", "none"], default=None,
+                       help="default $FIRMABLE_LLM_PROVIDER or mock")
+        p.add_argument("--db", type=Path, default=None, help="serving DB (default: the public DB, else the internal one)")
+        p.add_argument("--app-db", default=None, help="SQLite run store (default <workdir>/app/agent-runs.sqlite)")
 
     p = sub.add_parser("serve", help="run the ranked-account API and page")
     p.add_argument("snapshot", nargs="?", help="serve <workdir>/serving/SNAPSHOT.duckdb (default: $FIRMABLE_SERVING_DB)")
@@ -241,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
         except (FileNotFoundError, ValueError) as e:
             raise SystemExit(f"holdout-metrics: {e}") from None
         _print(holdout_metrics(rows))
+    elif args.cmd in ("agent-brief", "agent-eval"):
+        return _agent_command(args, pipe)
     elif args.cmd == "serve":
         import uvicorn
 
@@ -248,8 +270,56 @@ def main(argv: list[str] | None = None) -> int:
         from .phase3 import serving_path
 
         db = serving_path(pipe, args.snapshot) if args.snapshot else None
+        # Persist runs and briefs next to the other working files unless told otherwise.
+        os.environ.setdefault("FIRMABLE_APP_DB", str(pipe.workdir / "app" / "agent-runs.sqlite"))
         uvicorn.run(create_app(db), host=args.host, port=args.port)
     return 0
+
+
+def _agent_command(args: argparse.Namespace, pipe: Pipeline) -> int:
+    import time as _time
+
+    from .agent.config import AgentConfig
+    from .agent.runs import RunStore
+    from .agent.service import BriefService
+    from .api.store import Store
+    from .phase3 import serving_path
+    from .semantic import SemanticLayer
+
+    db = args.db
+    if db is None:
+        public = pipe.workdir / "serving" / f"{args.snapshot}.public.duckdb"
+        db = public if public.exists() else serving_path(pipe, args.snapshot)
+    env = dict(os.environ)
+    env["FIRMABLE_LLM_PROVIDER"] = args.provider or env.get("FIRMABLE_LLM_PROVIDER") or "mock"
+    config = AgentConfig.from_env(env)
+    app_db = args.app_db or str(pipe.workdir / "app" / "agent-runs.sqlite")
+    semantic = SemanticLayer(Store(db))
+    service = BriefService(semantic, config, RunStore(app_db))
+    try:
+        if args.cmd == "agent-brief":
+            resp = service.run_now(kind="ask" if args.question else "brief", account_id=args.account_id,
+                                   use_case=args.use_case, scope="cli:local", question=args.question,
+                                   signal_id=args.signal)
+            run = resp.pop("run", None) or {}
+            out = {"state": resp["state"], "cache": resp.get("cache"), "run_id": resp.get("run_id"),
+                   "disposition": run.get("disposition"), "metrics": run.get("metrics"), "output": resp["output"]}
+            if args.trace:
+                out["trace"] = run.get("trace")
+                out["issues"] = run.get("issues")
+            _print(out)
+            return 0
+        from .evaluation.agent_eval import run_eval
+
+        stamp = _time.strftime("%Y%m%dT%H%M%S")
+        out_dir = args.out or pipe.workdir / "eval" / f"{args.snapshot}-agent-{config.provider}-{stamp}"
+        summary = run_eval(semantic, service, Path(out_dir), max_cost_usd=args.max_cost)
+        _print({"out": str(out_dir), **summary})
+        return 0
+    except KeyError as e:
+        raise SystemExit(f"{args.cmd}: account not found: {e}") from None
+    finally:
+        service.close()
 
 
 if __name__ == "__main__":

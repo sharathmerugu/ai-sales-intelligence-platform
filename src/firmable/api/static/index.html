@@ -420,7 +420,7 @@ function signalCard(id, c, primary) {
     el("div", { class: "sig-meta" },
       el("span", { title: "Backend ownership confidence" }, `Ownership: ${c.confidence?.ownership || "—"}`),
       el("span", { title: "Scan observation time (UTC)" }, `Observed ${shortDate(c.observed?.last)}`),
-      el("span", {}, `${c.signal_name}${c.counts ? " · " + c.counts.services.toLocaleString() + " services" : ""}`),
+      el("span", {}, `${c.signal_name}${c.counts ? " · " + c.counts.services.toLocaleString() + (c.counts.services === 1 ? " service" : " services") : ""}`),
       btn));
 }
 
@@ -462,7 +462,7 @@ function followUps(id, questions, uc) {
     slot.replaceChildren(el("div", { class: "who" }, q, out.kind === "agent" ? " · AI, checked" : " · factual"), el("p", {}, out.answer), evBtn);
   };
   form.addEventListener("submit", (ev) => { ev.preventDefault(); const q = input.value.trim(); input.value = ""; ask(q); });
-  box.append(el("h3", {}, "Ask a follow-up"),
+  box.append(el("h4", {}, "Ask a follow-up"),
     el("div", { class: "chips" }, questions.map((q) => { const b = el("button", { class: "chip", type: "button" }, q); b.addEventListener("click", () => ask(q)); return b; })),
     form, answers);
   return box;
