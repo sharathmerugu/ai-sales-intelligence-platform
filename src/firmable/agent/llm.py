@@ -97,6 +97,8 @@ class AnthropicClient:
             if e.status_code >= 500 or e.status_code in (408, 409, 429, 529):
                 raise TransientLLMError(f"{type(e).__name__} {e.status_code}") from e
             raise FatalLLMError(f"{type(e).__name__} {e.status_code}: {e.message}") from e
+        except (a.AnthropicError, TypeError) as e:  # e.g. no credential configured (raised as TypeError)
+            raise FatalLLMError(f"{type(e).__name__}: {str(e)[:200]}") from e
         latency = (time.perf_counter() - started) * 1000
         u = msg.usage
         usage = Usage(input_tokens=u.input_tokens or 0, output_tokens=u.output_tokens or 0,

@@ -74,6 +74,14 @@ Rollback to the previous deployment: check out `fd7c671` and run `scripts/stage_
 public DB). Rollback to attribution v4: tag `scoring-v3-deployed` (`5be744f`) with the backed-up
 `~/firmable-work/serving/2026-11-07.public.scoring-v3-attr-v4.duckdb` copied over the public DB.
 
+## Agentic briefs (branch `feat/agentic-briefs`, not deployed)
+
+The image needs no change to serve the new endpoints: with `FIRMABLE_LLM_PROVIDER` unset the page shows the
+deterministic cards. To turn the agent on in Railway (requires authorization; not done):
+`railway variable set ANTHROPIC_API_KEY --stdin` and `FIRMABLE_LLM_PROVIDER=anthropic`; mount a volume
+and set `FIRMABLE_APP_DB=/data/agent-runs.sqlite` so runs and cached briefs survive restarts (the default is
+in memory). Keep one replica: the job pool and SQLite are per process. Details: `docs/agentic-briefs.md`.
+
 ## Limits
 
 - The rate limiter lives in process memory: it resets on restart and does not span replicas.

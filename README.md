@@ -134,6 +134,18 @@ Ranking: `docs/ranking-v3.md`, ADR 0009. Attribution v5: `docs/attribution-imple
 Holdout: `docs/evaluation.md`. Prospecting modes: `docs/prospecting-modes.md`.
 **Submission summary, verification and limitations: `docs/SUBMISSION.md`.**
 
+## Agentic signal briefs
+
+```bash
+uv run firmable agent-brief 2026-11-07 "ACCOUNT_ID" --use-case remote_access --provider mock --trace
+uv run firmable agent-eval 2026-11-07 --provider mock                   # agent vs deterministic briefs
+FIRMABLE_LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=... uv run firmable serve 2026-11-07
+```
+
+Semantic layer, one bounded tool-using agent, publication checks, fallback cards, runs and cache,
+evaluation and the two prospecting walkthroughs: `docs/agentic-briefs.md`, ADR 0011. Without a provider
+(`FIRMABLE_LLM_PROVIDER` unset) the page shows the deterministic cards; lists, ranks and evidence are unchanged.
+
 ## Research reproduction
 
 See `CLAUDE.md` → "Running the research SQL". `sql/exploration.sql` is

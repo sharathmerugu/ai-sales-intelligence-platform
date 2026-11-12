@@ -58,6 +58,11 @@ All responses are JSON except `GET /`. `limit` defaults to 50; values outside 1�
 | `GET /use-cases` | `{segment, all:{total, research, verify, context, excluded}, items:[{id, name, description, context_only, signals, counts}]}` |
 | `GET /locations` | `{segment, note, items:[{country_code, accounts, research}]}`: IP-geolocation countries, not headquarters |
 | `GET /accounts/{account_id}/evidence` | `{account_id, total, limit, offset, labels, disclaimer, items:[evidence]}`; 307 for an older id, else 404 |
+| `GET /semantic/snapshot` · `/semantic/account` · `/semantic/signals` · `/semantic/evidence` · `/semantic/priority` · `/semantic/playbooks[/{use_case}]` | Typed semantic-layer objects (`?account_id=`; older ids resolve, `resolved_from` set). `/semantic/evidence?ids=…` returns only the cited observations of that account. `docs/agentic-briefs.md` §2 |
+| `POST /briefs` `{account_id, use_case?, refresh?}` | `{state: ready\|pending\|fallback, cache, run_id, output}`: a checked agent brief from cache, or the factual brief at once plus a `run_id` to poll. §3–6 |
+| `POST /ask` `{account_id, use_case?, question, signal_id?}` | Same envelope for a scoped follow-up answer |
+| `GET /runs/{run_id}` `?trace=` | Run status, disposition, metrics (calls, tokens, latency, retries, repairs, cost), output; 404 for another caller's run; output withheld when `stale` |
+| `GET /agent/config` · `GET /agent/runs` | Provider, model and budgets (no secrets) · the caller's recent runs |
 
 ### `/accounts` filters
 
@@ -157,6 +162,7 @@ uv run pytest tests/test_api*.py
 
 - `tests/test_api.py`: fixture parquet files written column for column from the contract (the evidence column order matches `firmable.accounts.rollup`), served over `TestClient`. Covers ranking, pagination totals, `q` (name, id, details, literal `%`/`_`, injection-like strings), signal AND, tier and country filters, `view`, `band`, `ownership`, `min_priority`, the v3 item shape (no bare `score`), limit caps, account detail for ids with a space and colons, 404s, successor redirects for older ids (accent fold, `org`/`net` swap, URL-special characters, query kept, `/evidence` shadowing), evidence rendering with `None` fields, provenance, `suppressed_by`, registry wording, the page, and the env-var entry point.
 - `tests/test_api_wording.py`: safe template rendering.
+- `tests/test_agent.py`: semantic contracts and evidence linkage, preserved scores and confidence, tool authorization and snapshot binding, the publication checks, agent tool selection, budgets, repair, retries, fallback, cache isolation and invalidation, dedupe, cooldown, and the `/briefs` → `/runs` → `/ask` flow (mock models only).
 - `tests/test_api_rollup.py`: runs the real `build_accounts` on synthetic hits and serves its output, so column drift between M3 and M4 fails a test. It also loads the real `firmable.signals.registry.SIGNALS` into the serving DB and checks the wording fields are present.
 
 ## Known limitations
