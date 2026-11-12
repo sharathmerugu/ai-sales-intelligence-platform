@@ -32,6 +32,34 @@ from .tools import ToolContext
 MAX_QUESTION_CHARS = 300
 
 
+def recheck_output(semantic: SemanticLayer, output: dict[str, Any], kind: str, use_case: str | None) -> list[Any]:
+    """Run the current publication checks on stored output, with the records it cites as the ledger."""
+    from .checks import CheckContext, check_answer, check_brief
+    from .tools import EvidenceIndex
+
+    account = semantic.get_account(output["account_id"], use_case)
+    if account is None:
+        return ["account no longer exists"]
+    if kind == "brief":
+        refs = [e["observation_id"] for c in output.get("cards") or [] for e in c.get("evidence") or []]
+    else:
+        refs = [e["observation_id"] for e in output.get("evidence") or []]
+    ctx = CheckContext(account, semantic.signal_occurrences(account.account_id, use_case),
+                       EvidenceIndex(semantic.evidence_by_ids(account.account_id, refs)),
+                       semantic.get_seller_playbook(use_case), semantic.vocabulary, semantic.snapshot.snapshot_id,
+                       use_case)
+    if kind == "brief":
+        draft = {"snapshot_id": output["snapshot_id"], "decision": output["decision"],
+                 "follow_up_questions": output.get("follow_up_questions") or [],
+                 "cards": [{**{k: c[k] for k in ("signal_id", "headline", "finding", "relevance", "action",
+                                                 "discovery_question")},
+                            "evidence_refs": [e["observation_id"] for e in c.get("evidence") or []]}
+                           for c in output.get("cards") or []]}
+        return check_brief(draft, ctx)
+    return check_answer({"snapshot_id": output["snapshot_id"], "answer": output["answer"], "evidence_refs": refs,
+                         "follow_up_questions": output.get("follow_up_questions") or []}, ctx)
+
+
 def normalize_question(q: str) -> str:
     return re.sub(r"\s+", " ", q or "").strip()
 
@@ -46,6 +74,7 @@ class BriefService:
         self.agent = InvestigationAgent(semantic, self.client, config)
         # Briefs generated once (`firmable agent-pregenerate`) and shipped read-only: served before anything else.
         self.pregen: RunStore | None = None
+        self._recheck: dict[tuple[Any, int], bool] = {}
         if config.pregenerated_db and Path(config.pregenerated_db).exists():
             self.pregen = RunStore(config.pregenerated_db, read_only=True)
             log("agent.pregenerated", path=config.pregenerated_db)
@@ -93,16 +122,27 @@ class BriefService:
     def content_key(self, kind: str, account_id: str, use_case: str | None, question: str | None = None,
                     signal_id: str | None = None) -> str:
         """What a brief is about, independent of who asks and which model wrote it: account, snapshot,
-        evidence digest, lens and playbook, question, and the check / semantic versions it passed."""
+        evidence digest, lens and playbook, question and semantic version. Not the check version: stored
+        output is re-checked with the current checks whenever it is served (`stored_output_ok`)."""
         from ..semantic.models import SEMANTIC_VERSION
-        from .checks import VALIDATOR_VERSION
         playbook = self.semantic.get_seller_playbook(use_case)
         payload = {"kind": kind, "account_id": account_id, "snapshot_id": self.semantic.snapshot.snapshot_id,
                    "evidence_digest": self.semantic.context_digest(account_id), "use_case": use_case,
                    "playbook": [playbook.id, playbook.version], "signal_id": signal_id,
                    "question": normalize_question(question or "").lower() or None,
-                   "validator_version": VALIDATOR_VERSION, "semantic_version": SEMANTIC_VERSION}
+                   "semantic_version": SEMANTIC_VERSION}
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:40]
+
+    def stored_output_ok(self, output: dict[str, Any], kind: str, use_case: str | None) -> bool:
+        """Re-check stored output with the current checks; failures are not served (fallback instead)."""
+        from .checks import VALIDATOR_VERSION
+        memo_key = (output.get("generation", {}).get("run_id"), VALIDATOR_VERSION)
+        if memo_key not in self._recheck:
+            issues = recheck_output(self.semantic, output, kind, use_case)
+            self._recheck[memo_key] = not issues
+            if issues:
+                log("agent.stored_output_rejected", run_id=memo_key[0], issues=[str(i) for i in issues[:5]])
+        return self._recheck[memo_key]
 
     def _ctx(self, account_id: str, use_case: str | None, scope: str, mode: str = "brief",
              question: str | None = None, signal_id: str | None = None) -> ToolContext:
@@ -132,7 +172,7 @@ class BriefService:
         ckey = self.content_key(kind, account_id, use_case, question, signal_id)
         if self.pregen is not None and not refresh:
             hit = self.pregen.published_by_content(ckey)
-            if hit is not None:
+            if hit is not None and self.stored_output_ok(hit["output"], kind, use_case):
                 return {**base, "state": "ready", "cache": "pregenerated", "run_id": hit["run_id"],
                         "output": hit["output"]}
 
@@ -164,10 +204,10 @@ class BriefService:
                 "output": self.agent.fallback(ctx, "pending", versions(self.config)) if kind == "brief" else None}
 
     def run_now(self, *, kind: str, account_id: str, use_case: str | None, scope: str, question: str | None = None,
-                signal_id: str | None = None) -> dict[str, Any]:
+                signal_id: str | None = None, refresh: bool = False) -> dict[str, Any]:
         """Synchronous run for the CLI and evaluation; persisted like any other run. Uses the cache."""
         resp = self.request(kind=kind, account_id=account_id, use_case=use_case, scope=scope, question=question,
-                            signal_id=signal_id)
+                            signal_id=signal_id, refresh=refresh)
         if resp["state"] == "pending":
             fut = self.futures.get(resp["run_id"])
             if fut is not None:
@@ -176,7 +216,8 @@ class BriefService:
             assert run is not None
             return {**resp, "state": "ready" if run["status"] == "succeeded" else "fallback",
                     "output": run["output"], "run": run}
-        run = self.runs.get_run(resp["run_id"]) if resp.get("run_id") else None
+        store = self.pregen if resp.get("cache") == "pregenerated" else self.runs
+        run = store.get_run(resp["run_id"]) if resp.get("run_id") and store is not None else None
         return {**resp, "run": run}
 
     def _execute(self, run_id: str, ctx: ToolContext) -> None:

@@ -29,7 +29,7 @@ from ..api.brief import SUB_FLAG_TEXT
 from ..semantic.models import AccountView, SellerPlaybook, SignalOccurrence
 from .tools import EvidenceIndex
 
-VALIDATOR_VERSION = 1
+VALIDATOR_VERSION = 2  # v2: ranges, vague proportions, inferred missing processes, verify-only actions
 
 MAX_CARDS = 3
 MAX_REFS_PER_CARD = 5
@@ -89,6 +89,13 @@ UNSUPPORTED = [
                                    r"enforced|configured|required|in place|used|applied)|disabled|absent|missing|off)\b"
                                    r"|\b(?:isn'?t|aren'?t)\s+(?:enabled|enforced|configured|required)\b", re.I)),
     ("unverified CVE", re.compile(r"\bCVE-\d{4}-\d{3,}\b", re.I)),
+    ("inferred missing process", re.compile(
+        r"\b(?:indicat\w*|suggest\w*|shows?|means?|proves?|reveal\w*|points? to)\s+(?:that\s+)?(?:there is\s+)?(?:no|a lack "
+        r"of|an absence of|missing|weak|poor|immature)\b|\bnot\s+(?:centrally\s+|properly\s+|actively\s+)?(?:governed|"
+        r"managed|monitored|patched|maintained|tracked)\b|\b(?:lack|absence) of (?:centrali[sz]ed|any|a|proper)\b"
+        r"|\bno (?:centrali[sz]ed|central|proper|formal)\b", re.I)),
+    ("generalization", re.compile(r"\b(?:most|majority|mostly|nearly all|almost all|the bulk|predominantly|largely)\b"
+                                  r"|\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b|\brange of addresses\b", re.I)),
     ("buying intent", re.compile(r"\b(?:is|are)\s+(?:actively\s+)?(?:evaluating|looking (?:for|to)|in the market|planning|"
                                  r"budgeting|shopping)\b|\bbuying intent\b|\bready to buy\b|\bha(?:s|ve) budget\b|"
                                  r"\bpurchase intent\b", re.I)),
@@ -104,6 +111,7 @@ GO = re.compile(r"\b(?:lead with|reach out|open with|pitch|contact (?:them|the|t
 STOP = re.compile(r"\b(?:do not (?:contact|pursue|reach out|open)|don'?t (?:contact|pursue|reach out)|hold off|"
                   r"not a prospect|skip this account|deprioriti[sz]e|no outreach)\b", re.I)
 VERIFY = re.compile(r"\b(?:verify|confirm|check)\b[^.]*\b(?:own\w*|operat\w*|runs?|belongs?|whose)\b", re.I)
+SAME_CHECK = re.compile(r"\b(?:same|ownership) check\b", re.I)
 PARK = re.compile(r"\b(?:monitor|hold|keep|context|recheck|watch|park|revisit)\b", re.I)
 LENS_GAP = re.compile(r"\b(?:no|not|outside|none)\b", re.I)
 IMPERATIVES = {
@@ -228,7 +236,8 @@ class Checker:
     # -- reusable text checks ------------------------------------------------------
 
     def signal_numbers(self, s: SignalOccurrence) -> set[float]:
-        return {float(x) for x in (s.n_services, s.n_ips, s.n_counted_services, s.evidence_rows, s.counted_rows)}
+        base = {float(x) for x in (s.n_services, s.n_ips, s.n_counted_services, s.evidence_rows, s.counted_rows)}
+        return base | {float(v) for v in s.defect_counts.values()} | {float(v) for v in s.product_counts.values()}
 
     def ref_numbers(self, refs: list[str], signal_id: str | None = None) -> set[float]:
         items = [e for e in (self.ctx.evidence.get(r, signal_id) for r in refs) if e is not None]
@@ -323,9 +332,9 @@ class Checker:
             elif go and go.start() < verify.start():
                 self.add("status_mismatch", "decision", "puts outreach before ownership is verified")
             for where, act in actions:
-                if GO.search(act) and not VERIFY.search(act):
-                    self.add("status_mismatch", where, "recommends outreach although ownership is unresolved; make "
-                             "the step a verification")
+                if not (VERIFY.search(act) or SAME_CHECK.search(act)):
+                    self.add("status_mismatch", where, "ownership is unresolved: every next step is a verification "
+                             "(who operates these services), not a conversation with the account")
         elif status == "not_a_prospect":
             if not stop:
                 self.add("status_mismatch", "decision", "the backend excludes this account: say not to pursue it")

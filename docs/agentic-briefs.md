@@ -140,19 +140,23 @@ same checks: **440 / 440** real accounts (up to 40 per status, 5 statuses, 3 len
   `run_id` (`pending`), or the factual cards with the reason (`llm_disabled`, `cooldown`, `rate_limited`).
   The page polls `/runs/{id}` and swaps in the checked brief. `POST /ask` is the same for follow-ups.
 
-## 6a. Stored briefs: generate once, serve from a file (implemented; not yet generated)
+## 6a. Stored briefs: generate once, serve from a file (implemented; partly generated)
 
 The dataset is one fixed snapshot, so briefs need generating only once. `firmable agent-pregenerate SNAPSHOT`
 runs the agent over a cohort and stores the checked output in `<workdir>/app/SNAPSHOT.briefs.sqlite`;
 the app opens that file read-only (`FIRMABLE_PREGENERATED_DB`) and serves a match before anything else,
 with no model configured at serve time (`cache: "pregenerated"`). Matching uses a content key (account,
-snapshot, evidence digest, lens and playbook, question, check and semantic versions), so a stored brief is
-served only while the evidence and checks it passed are unchanged. Accounts outside the cohort get the
+snapshot, evidence digest, lens and playbook, question, semantic version), so a stored brief is served only
+while its evidence is unchanged; it is also re-checked with the current checks when served, and one that
+fails is not shown. `agent-pregenerate` re-keys stored rows when the key definition changes and regenerates
+stored briefs that fail the current checks. Accounts outside the cohort get the
 deterministic cards. The run is resumable; anything already stored is skipped.
 
 - Cohort (31 account-lens pairs for 2026-11-07 with defaults): the 15 evaluation cases, the top 10
   research candidates and top 2 ownership-unresolved accounts per lens; follow-up answers for the brief's
   suggested questions on the first 3 accounts per lens.
+- `--max-requests N` caps model requests for the whole run (free tiers count requests per day); lenses are
+  interleaved so an early stop still covers both flows.
 - Free model: any OpenAI-compatible endpoint (`FIRMABLE_LLM_PROVIDER=openai_compat`). Default is a local
   Ollama server (`http://localhost:11434/v1`): free, no account, no data leaves the machine, $0 API cost
   recorded (hardware and power not counted). A hosted free tier works with `FIRMABLE_LLM_BASE_URL`,
@@ -187,6 +191,31 @@ for the agent, the fallback cards and the serving-v4 report on: checks pass, len
 relevance, action present, status coherence, unsupported-claim patterns, words, hedges; plus recorded
 operations. `review.csv` has blank columns for human judgments (factual support, emphasis, relevance,
 clarity, usefulness 1–5).
+
+**Measured with a real free model (2026-11-13, public DB).** OpenRouter free tier,
+`nvidia/nemotron-3-ultra-550b-a55b:free`, 50 requests/day on this key; one generation run of 44 requests:
+
+| | count |
+|---|---|
+| brief runs attempted | 11 (1 smoke test + 10 cohort) |
+| published after checks | 9 (5 needed one repair: too many citations, unsupported numbers) |
+| rejected after repairs → fallback | 2 (unsupported numbers; non-imperative action) |
+| published, then rejected by checks v2 | 4 (see below) |
+| **served today** | **5** (5 of the 15 evaluation cases) |
+| model requests / tool calls (served 5) | 19 / 24; 105,918 input and 11,706 output tokens |
+| latency per brief (served 5) | median 47 s, max 152 s (free-tier queueing) |
+| cost | $0 (free tier; recorded at a configured zero rate) |
+
+Reading the 9 published briefs by hand found failures the v1 checks let through, all confirmed against
+the data: "in the 118.202.x.x/16 range" (97 of 520 addresses are; generalized from one evidence page),
+"most also accept TLS 1.0/1.1" (211 of 431), two inferred missing processes ("indicates no centralized
+certificate lifecycle management", "not centrally governed"), and an ownership-unresolved account whose
+cards said to ask the network-security lead about MFA. Checks v2 reject each class (tests use the real
+wording), signals now expose exact `defect_counts` / `product_counts` so the model can say "211 of 431",
+and the prompt (v2) says so. The other claims checked held: 520/520 expired, 409/409 legacy TLS, 576/576
+self-signed. The 5 served briefs pass v2. Remaining cohort items and follow-up answers are generated on later
+days (`agent-pregenerate` resumes); they show the factual brief meanwhile, and follow-up chips on stored
+briefs return the factual answer until their answers are generated.
 
 **Measured, mock model only (2026-11-13, public DB):**
 
@@ -227,9 +256,10 @@ a publication protocol that SQLite and local renames do not provide.
 
 ## 9. Limitations and outstanding checks
 
-- **Stored briefs not generated yet:** installing a local model was not possible from this session (Homebrew
-  has no Intel-Mac bottle for Ollama and started a source build, which was stopped; running a downloaded
-  binary was refused by the session's permission policy). The command in §6a runs once a model is available.
+- **Stored briefs partly generated:** 5 of 31 cohort briefs are servable; the free tier allows 50 requests a
+  day (a local Ollama install was not possible from this session: no Intel-Mac Homebrew bottle, and running
+  a downloaded binary was refused by the session's permission policy).
+- One reader (the implementer) reviewed the 9 real briefs; no independent reviewer scores exist yet.
 - **No real-model run yet:** no Anthropic credential was available in this environment. Outstanding:
   (1) one `agent-brief --provider anthropic --trace` call to confirm the SDK request shape, refusal
   fallback beta and tool loop; (2) `agent-eval --provider anthropic --max-cost N` for real tokens,

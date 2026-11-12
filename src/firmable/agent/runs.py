@@ -192,6 +192,19 @@ class RunStore:
         return _loads(self._one("SELECT * FROM published WHERE content_key = ? ORDER BY created_at DESC LIMIT 1",
                                 (content_key,)))
 
+    def rekey(self, compute) -> int:
+        """Recompute `content_key` for every run and published row with `compute(run) -> key` (after the key
+        definition changes). Returns the number of runs whose key changed."""
+        changed = 0
+        for run in self._all("SELECT run_id, kind, account_id, use_case, question, signal_id, content_key "
+                             "FROM agent_runs"):
+            key = compute(dict(run))
+            if key != run["content_key"]:
+                changed += 1
+                self._exec("UPDATE agent_runs SET content_key = ? WHERE run_id = ?", (key, run["run_id"]))
+                self._exec("UPDATE published SET content_key = ? WHERE run_id = ?", (key, run["run_id"]))
+        return changed
+
     def runs_since(self, scope: str, since: float) -> int:
         return self._one("SELECT count(*) AS n FROM agent_runs WHERE scope = ? AND created_at >= ?",
                          (scope, since))["n"]

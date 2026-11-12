@@ -278,6 +278,32 @@ def test_review_found_claim_gaps_are_closed(semantic, field, text):
     assert "unsupported_claim" in codes(check_brief(good_brief(card={field: text}), check_ctx(semantic)))
 
 
+# Failures seen in real free-model output (nemotron-3-ultra, 2026-11-13), now rejected.
+@pytest.mark.parametrize("field,text", [
+    ("finding", "RDP logins on 2 services in the 192.0.2.0/24 range."),       # range generalized from a page
+    ("finding", "RDP logins on 2 services, most on port 3389."),              # vague proportion
+    ("relevance", "Exposed RDP indicates no centralized remote-access control."),
+    ("relevance", "These logins are not centrally managed, the case for remote-access security."),
+])
+def test_real_model_failures_are_rejected(semantic, field, text):
+    assert "unsupported_claim" in codes(check_brief(good_brief(card={field: text}), check_ctx(semantic)))
+
+
+def test_unresolved_ownership_allows_only_verification_steps(semantic):
+    c = check_ctx(semantic, SHARED)
+    card = {"signal_id": "S01", "headline": "One FortiGate gateway", "evidence_refs": ["obs5"],
+            "finding": "The scan saw a FortiGate login portal on 1 service.",
+            "relevance": "Internet-facing gateways are the opening for remote-access security.",
+            "action": "Ask the network-security lead how gateway access is controlled."}
+    issues = check_brief(good_brief(decision="Verify the service owner before outreach.", card=card), c)
+    assert "status_mismatch" in codes(issues)
+
+
+def test_exact_breakdowns_are_exposed_and_citable(semantic):
+    s06 = semantic.list_signals(ACME, "certificate_management").items[0]
+    assert s06.defect_counts == {"TLS 1.0/1.1 accepted": 1, "Expired certificate": 1}
+
+
 def test_outreach_verbs_and_ownership_assertions_on_unresolved_accounts(semantic):
     c = check_ctx(semantic, SHARED)
     card = {"signal_id": "S01", "headline": "One FortiGate gateway", "evidence_refs": ["obs5"],
@@ -797,6 +823,11 @@ def test_stored_briefs_are_served_without_a_model(db, semantic, tmp_path):
         assert (r["state"], r["cache"], r["output"]["kind"]) == ("ready", "pregenerated", "agent")
         a = c.post("/ask", json={"account_id": EXAMPLE, "use_case": "remote_access", "question": question}).json()
         assert (a["state"], a["cache"]) == ("ready", "pregenerated")
+        # Stored output is re-checked when served; one that fails the current checks is not shown.
+        svc = app.state.briefs
+        svc._recheck = {k: False for k in svc._recheck}
+        stale = c.post("/briefs", json={"account_id": EXAMPLE, "use_case": "remote_access"}).json()
+        assert stale["state"] == "fallback"
         other_lens = c.post("/briefs", json={"account_id": EXAMPLE, "use_case": "certificate_management"}).json()
         assert other_lens["state"] == "fallback"  # not generated: the deterministic brief
         assert c.get("/agent/config").json()["pregenerated"] is True

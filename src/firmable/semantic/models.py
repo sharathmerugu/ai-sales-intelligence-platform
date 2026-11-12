@@ -89,6 +89,8 @@ class SignalOccurrence(BaseModel):
     first_observed: str | None
     last_observed: str | None
     evidence_rows: int
+    defect_counts: dict[str, int] = Field(default_factory=dict, description="evidence rows per defect (exact)")
+    product_counts: dict[str, int] = Field(default_factory=dict, description="evidence rows per product (exact)")
     counted_rows: int
     suppressed_rows: int
 

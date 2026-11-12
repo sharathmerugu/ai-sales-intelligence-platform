@@ -496,6 +496,19 @@ class Store:
             [account_id])
         return {r["signal_id"]: r for r in rows}
 
+    def signal_breakdown(self, account_id: str) -> dict[str, dict[str, dict[str, int]]]:
+        """Per signal: how many evidence rows carry each defect flag and each product (exact counts, so a brief
+        can say '211 of 431' instead of generalizing from a page of rows)."""
+        out: dict[str, dict[str, dict[str, int]]] = {}
+        for r in self._query("""SELECT signal_id, f, count(*) AS n FROM (SELECT signal_id, unnest(sub_flags) AS f
+                                FROM account_evidence WHERE account_id = ?) GROUP BY ALL""", [account_id]):
+            out.setdefault(r["signal_id"], {"defects": {}, "products": {}})["defects"][r["f"]] = r["n"]
+        for r in self._query("""SELECT signal_id, product AS p, count(*) AS n FROM account_evidence
+                                WHERE account_id = ? AND product IS NOT NULL AND product <> '' GROUP BY ALL
+                                ORDER BY n DESC""", [account_id]):
+            out.setdefault(r["signal_id"], {"defects": {}, "products": {}})["products"][r["p"]] = r["n"]
+        return out
+
     def evidence_by_ids(self, account_id: str, observation_ids: list[str],
                         signal: str | None = None) -> list[dict[str, Any]]:
         """Evidence rows of one account with the given observation ids (same columns as `account_evidence`).

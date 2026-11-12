@@ -108,6 +108,7 @@ class SemanticLayer:
         """Every signal of the account, lens signals first (same order as the deterministic brief)."""
         lens = set(USE_CASES_BY_ID[use_case].signals) if use_case in USE_CASES_BY_ID else set()
         coverage = self.store.signal_coverage(account_id)
+        breakdown = self.store.signal_breakdown(account_id)
         out = []
         for s in order_findings(self.store.account_signals(account_id), use_case):
             reg = self.registry.get(s["signal_id"], {})
@@ -122,6 +123,9 @@ class SemanticLayer:
                 defects=[SUB_FLAG_TEXT.get(f, f) for f in (s.get("sub_flags") or [])],
                 threat=reg.get("inferred_risk"),
                 first_observed=iso(cov.get("first_observed")), last_observed=iso(cov.get("last_observed")),
+                defect_counts={SUB_FLAG_TEXT.get(k, k): v for k, v in
+                               breakdown.get(s["signal_id"], {}).get("defects", {}).items()},
+                product_counts=dict(list(breakdown.get(s["signal_id"], {}).get("products", {}).items())[:10]),
                 evidence_rows=cov.get("n_rows") or 0, counted_rows=cov.get("n_counted") or 0,
                 suppressed_rows=cov.get("n_suppressed") or 0,
             ))

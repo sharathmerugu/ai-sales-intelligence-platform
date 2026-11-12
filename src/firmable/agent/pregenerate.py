@@ -55,6 +55,10 @@ def pregenerate(service: BriefService, items: list[dict[str, Any]], answers_per_
     """`max_requests` caps model calls across the whole run (free tiers count requests per day): a new run
     starts only while a full per-run budget still fits."""
     progress_path.parent.mkdir(parents=True, exist_ok=True)
+    rekeyed = service.runs.rekey(lambda r: service.content_key(r["kind"], r["account_id"], r["use_case"],
+                                                                r["question"], r["signal_id"]))
+    if rekeyed:
+        log("agent.pregenerate_rekeyed", runs=rekeyed)
     answered: dict[str, int] = {}
     tally: dict[str, int] = {}
     started = time.time()
@@ -87,12 +91,13 @@ def pregenerate(service: BriefService, items: list[dict[str, Any]], answers_per_
                 continue
             stored = service.runs.published_by_content(
                 service.content_key("brief", item["account_id"], item["use_case"]))
-            if stored is not None:  # generated earlier, under any scope
+            if stored is not None and service.stored_output_ok(stored["output"], "brief", item["use_case"]):
+                # generated earlier (under any scope) and still passes the current checks
                 resp = {"state": "ready", "cache": "hit", "output": stored["output"],
                         "run": service.runs.get_run(stored["run_id"])}
-            else:
+            else:  # new, or stored but failing the current checks: generate (again)
                 resp = service.run_now(kind="brief", account_id=item["account_id"], use_case=item["use_case"],
-                                       scope=SHARED_SCOPE)
+                                       scope=SHARED_SCOPE, refresh=stored is not None)
             record("brief", item, resp)
             out = resp.get("output") or {}
             lens = item["use_case"]
@@ -105,4 +110,4 @@ def pregenerate(service: BriefService, items: list[dict[str, Any]], answers_per_
                 a = service.run_now(kind="ask", account_id=item["account_id"], use_case=lens, scope=SHARED_SCOPE,
                                     question=q)
                 record("ask", item, a, q)
-    return {"items": len(items), "tally": tally, "model_requests": used, "seconds": round(time.time() - started, 1)}
+    return {"items": len(items), "rekeyed": rekeyed, "tally": tally, "model_requests": used, "seconds": round(time.time() - started, 1)}

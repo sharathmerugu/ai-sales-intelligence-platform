@@ -233,6 +233,9 @@ def summarize(results: list[dict[str, Any]], service: BriefService, seconds: flo
         "provider": service.config.provider, "model": service.config.model_label, "cases": len(results),
         "skipped": len(results) - len(done), "wall_seconds": round(seconds, 1),
         "mocked": service.config.provider == "mock",
+        "models_in_runs": sorted({m for r in done for m in ((r["agent"].get("metrics") or {}).get("models") or [])}),
+        "source": "stored runs (FIRMABLE_PREGENERATED_DB)" if service.pregen is not None and not service.enabled
+                  else "runs made by this evaluation",
     }
     for arm in ("agent", "fallback", "v4"):
         rows = [r[arm]["measures"] for r in done if r[arm].get("measures")]
@@ -277,8 +280,10 @@ def report_md(summary: dict[str, Any], results: list[dict[str, Any]]) -> str:
         lines += ["> **Mock model (`mock-heuristic`).** This run checks the harness (tools, budgets, checks, "
                   "persistence, cost accounting). It says nothing about language-model quality and its cost is zero "
                   "because no billed call was made.", ""]
-    lines += [f"Provider `{summary['provider']}`, model `{summary['model']}`, {summary['cases']} cases, "
-              f"{summary['wall_seconds']} s.", "", "| Measure | agent | fallback cards | v4 template |",
+    lines += [f"Provider `{summary['provider']}`, model `{summary['model']}`, models in runs "
+              f"{summary['models_in_runs']}, source: {summary['source']}; {summary['cases']} cases, "
+              f"{summary['wall_seconds']} s. Cases without a stored or generated agent brief fall back "
+              "(`fell_back`).", "", "| Measure | agent | fallback cards | v4 template |",
               "|---|---|---|---|"]
     for k in ("checks_pass", "emphasis_ok", "relevance_ok", "action_present", "status_coherent",
               "unsupported_claim_cases", "median_decision_words", "median_first_card_words", "median_total_words",
