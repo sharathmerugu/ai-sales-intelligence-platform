@@ -43,15 +43,27 @@ def cohort(service: BriefService, per_lens: int, verify: int = 2) -> list[dict[s
             add(r["account_id"], lens, "top")
         for r in store.search_accounts(view="verify", use_case=lens, limit=verify)[1]:
             add(r["account_id"], lens, "verify")
-    return out
+    # Alternate lenses so a request budget that stops early still covers both prospecting flows.
+    by_lens = [[i for i in out if i["use_case"] == lens] for lens in LENSES]
+    mixed = [x for pair in zip(*by_lens) for x in pair]
+    longest = max(by_lens, key=len)
+    return mixed + longest[len(mixed) // 2:]
 
 
 def pregenerate(service: BriefService, items: list[dict[str, Any]], answers_per_lens: int,
-                progress_path: Path) -> dict[str, Any]:
+                progress_path: Path, max_requests: int | None = None) -> dict[str, Any]:
+    """`max_requests` caps model calls across the whole run (free tiers count requests per day): a new run
+    starts only while a full per-run budget still fits."""
     progress_path.parent.mkdir(parents=True, exist_ok=True)
     answered: dict[str, int] = {}
     tally: dict[str, int] = {}
     started = time.time()
+    used = 0
+    per_run = service.config.max_model_calls + service.config.max_transient_retries
+
+    def budget_left() -> bool:
+        return max_requests is None or used + per_run <= max_requests
+
     with progress_path.open("a") as progress:
         def record(kind: str, item: dict[str, Any], resp: dict[str, Any], question: str | None = None) -> None:
             run = resp.get("run") or {}
@@ -65,10 +77,22 @@ def pregenerate(service: BriefService, items: list[dict[str, Any]], answers_per_
             key = f"{kind}:{'already_stored' if row['cache'] == 'hit' else row['disposition'] or row['cache']}"
             tally[key] = tally.get(key, 0) + 1
             log("agent.pregenerate", **row)
+            nonlocal used
+            if row["cache"] != "hit":
+                used += (row["model_calls"] or 0) + ((run.get("metrics") or {}).get("retries") or 0)
 
         for item in items:
-            resp = service.run_now(kind="brief", account_id=item["account_id"], use_case=item["use_case"],
-                                   scope=SHARED_SCOPE)
+            if not budget_left():
+                tally["stopped:request_budget"] = tally.get("stopped:request_budget", 0) + 1
+                continue
+            stored = service.runs.published_by_content(
+                service.content_key("brief", item["account_id"], item["use_case"]))
+            if stored is not None:  # generated earlier, under any scope
+                resp = {"state": "ready", "cache": "hit", "output": stored["output"],
+                        "run": service.runs.get_run(stored["run_id"])}
+            else:
+                resp = service.run_now(kind="brief", account_id=item["account_id"], use_case=item["use_case"],
+                                       scope=SHARED_SCOPE)
             record("brief", item, resp)
             out = resp.get("output") or {}
             lens = item["use_case"]
@@ -76,7 +100,9 @@ def pregenerate(service: BriefService, items: list[dict[str, Any]], answers_per_
                 continue
             answered[lens] = answered.get(lens, 0) + 1
             for q in (out.get("follow_up_questions") or [])[:3]:
+                if not budget_left():
+                    break
                 a = service.run_now(kind="ask", account_id=item["account_id"], use_case=lens, scope=SHARED_SCOPE,
                                     question=q)
                 record("ask", item, a, q)
-    return {"items": len(items), "tally": tally, "seconds": round(time.time() - started, 1)}
+    return {"items": len(items), "tally": tally, "model_requests": used, "seconds": round(time.time() - started, 1)}

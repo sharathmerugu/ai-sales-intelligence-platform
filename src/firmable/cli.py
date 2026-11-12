@@ -128,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--verify", type=int, default=2, help="ownership-unresolved accounts per lens")
             p.add_argument("--answers", type=int, default=3, help="accounts per lens whose follow-ups are answered")
             p.add_argument("--dry-run", action="store_true", help="print the cohort only")
+            p.add_argument("--max-requests", type=int, default=None,
+                           help="model requests for this whole run (free tiers cap requests per day)")
         else:
             p.add_argument("--max-cost", type=float, default=None, help="stop starting runs past this USD total")
             p.add_argument("--scope", default=None, help="run scope (use shared:pregenerated to reuse stored runs)")
@@ -329,7 +331,8 @@ def _agent_command(args: argparse.Namespace, pipe: Pipeline) -> int:
             if args.dry_run:
                 _print({"app_db": app_db, "items": items})
                 return 0
-            summary = pregenerate(service, items, args.answers, Path(app_db).with_suffix(".progress.jsonl"))
+            summary = pregenerate(service, items, args.answers, Path(app_db).with_suffix(".progress.jsonl"),
+                                  max_requests=args.max_requests)
             _print({"app_db": app_db, **summary})
             return 0
         from .evaluation.agent_eval import run_eval

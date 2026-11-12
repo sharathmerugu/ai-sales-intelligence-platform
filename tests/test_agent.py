@@ -801,3 +801,13 @@ def test_stored_briefs_are_served_without_a_model(db, semantic, tmp_path):
         assert other_lens["state"] == "fallback"  # not generated: the deterministic brief
         assert c.get("/agent/config").json()["pregenerated"] is True
     assert SHARED_SCOPE.startswith("shared")
+
+
+def test_pregeneration_respects_a_request_budget(semantic, tmp_path):
+    from firmable.agent.pregenerate import pregenerate
+    gen = BriefService(semantic, cfg(max_model_calls=4, max_transient_retries=0), RunStore(tmp_path / "b.sqlite"),
+                       client=HeuristicModel())
+    items = [{"account_id": a, "use_case": "remote_access", "why": "t"} for a in (EXAMPLE, SHARED, ACME)]
+    out = pregenerate(gen, items, 0, tmp_path / "p.jsonl", max_requests=8)
+    assert out["tally"]["brief:published"] == 2 and out["tally"]["stopped:request_budget"] == 1
+    assert out["model_requests"] <= 8
