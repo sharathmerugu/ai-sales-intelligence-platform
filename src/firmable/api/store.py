@@ -9,6 +9,7 @@ API queries. Every value that comes from a request is a bound parameter.
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 from datetime import datetime
@@ -18,14 +19,33 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 
+from ..accounts.scoring import EXPOSURE_SIGNALS
+from ..accounts.use_cases import USE_CASES_BY_ID, USE_CASES_VERSION, lens_rows_sql, rank_lenses
 from ..attribution.text import fold_name
 
 # v2: scoring v3 contract (priority, ownership, evidence, eligibility, legacy score)
 # v3: accent-folded search_text (attribution v5 `fold_name`); queries are folded the same way
-SERVING_VERSION = 3
+# v4: research states (views research / verify / context), use-case lenses (`account_use_cases`),
+#     sales wording columns in `signal_registry` (signals WORDING_VERSION 2)
+SERVING_VERSION = 4
 
 REGISTRY_COLUMNS = (
     "id", "version", "name", "family", "observed_fact_template", "inferred_risk", "hypothesis", "infra_exposure",
+    "short_name", "noun_one", "noun_many", "offering", "pitch", "opener", "discovery_questions", "confirm_on_call",
+    "detail_notes",
+)
+REGISTRY_DDL = """
+    CREATE TABLE signal_registry (
+        id VARCHAR PRIMARY KEY, version INTEGER, name VARCHAR, family VARCHAR,
+        observed_fact_template VARCHAR, inferred_risk VARCHAR, hypothesis VARCHAR, infra_exposure BOOLEAN,
+        short_name VARCHAR, noun_one VARCHAR, noun_many VARCHAR, offering VARCHAR, pitch VARCHAR, opener VARCHAR,
+        discovery_questions VARCHAR[], confirm_on_call VARCHAR[],
+        detail_notes VARCHAR  -- JSON object: detail label -> note
+    )
+"""
+USE_CASE_COLUMNS = (
+    "account_id", "uc_id", "uc_signal_ids", "uc_n_services", "uc_n_ips", "uc_priority", "uc_rank",
+    "uc_percentile", "uc_evidence_quality",
 )
 
 ACCOUNT_COLUMNS = (
@@ -38,15 +58,42 @@ ACCOUNT_COLUMNS = (
     "evidence_quality", "evidence_quality_band", "actionable", "actionable_blockers",
     "legacy_score", "legacy_rank", "legacy_scoring_version", "explanation", "scoring_version", "eligibility_version",
 )
-# Which accounts a listing shows. `actionable` is the outreach list; `review` holds eligible accounts
-# with low ownership, open review flags or no security observation; `excluded` holds accounts that
-# are not in the prospect population (registry placeholders, pool labels).
+# Which accounts a listing shows, by research state (docs/sales-brief.md §4):
+# `research`: research candidates: the scoring-v3 `actionable` gate (eligible, ownership medium or
+#   high, no review flag, a counted security observation above a scanner tag) AND a counted exposure
+#   signal. In a lens of hygiene signals only (certificates) the exposure condition is dropped;
+# `hygiene`: passes the gate on certificate / TLS findings alone (96% of gated accounts, 2026-11-07);
+# `verify`: eligible, but ownership must be verified first (low ownership or an open review flag);
+# `context`: eligible and owned, but only technographic or tag-level evidence (context only);
+# `excluded`: not a prospect (registry placeholders, pool labels, provider sub-allocations).
+# `actionable` and `review` are the pre-v4 names, kept as aliases (`review` = verify + context).
+_VERIFY = "(list_contains(actionable_blockers, 'ownership_low') OR list_contains(actionable_blockers, 'review_flags'))"
+# `top_signals` holds the account's counted signals
+_EXPOSURE = "list_has_any(top_signals, [" + ", ".join(f"'{s}'" for s in sorted(EXPOSURE_SIGNALS)) + "])"
 VIEWS = {
-    "actionable": "actionable",
-    "review": "eligibility = 'eligible' AND NOT actionable",
+    "research": f"actionable AND {_EXPOSURE}",
+    "hygiene": f"actionable AND NOT {_EXPOSURE}",
+    "verify": f"eligibility = 'eligible' AND NOT actionable AND {_VERIFY}",
+    "context": f"eligibility = 'eligible' AND NOT actionable AND NOT {_VERIFY}",
     "excluded": "eligibility = 'excluded'",
     "all": None,
+    "actionable": "actionable",
+    "review": "eligibility = 'eligible' AND NOT actionable",
 }
+STATE_VIEWS = ("research", "hygiene", "verify", "context", "excluded")  # one per research state
+
+
+def view_sql(view: str, use_case: str | None = None) -> str | None:
+    """SQL of a view; in a hygiene-only lens (certificates) TLS findings make a research candidate."""
+    uc = USE_CASES_BY_ID.get(use_case or "")
+    if uc is not None and uc.hygiene_is_the_finding:
+        if view == "research":
+            return "actionable"
+        if view == "hygiene":
+            return "false"
+    return VIEWS[view]
+
+
 ACCOUNT_ORDER = "rank NULLS LAST, opportunity_priority DESC, account_id"
 
 # Account ids are derived from names, so an attribution rebuild can change them. Old links are
@@ -156,33 +203,29 @@ def build_serving_db(
                 """,
                 [src["account_evidence"]],
             )
-            con.execute(
-                """
-                CREATE TABLE signal_registry (
-                    id VARCHAR PRIMARY KEY, version INTEGER, name VARCHAR, family VARCHAR,
-                    observed_fact_template VARCHAR, inferred_risk VARCHAR, hypothesis VARCHAR,
-                    infra_exposure BOOLEAN
-                )
-                """
-            )
+            con.execute(REGISTRY_DDL)
             con.executemany(
-                "INSERT INTO signal_registry VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [[_field(entry, c) for c in REGISTRY_COLUMNS] for entry in registry],
+                f"INSERT INTO signal_registry VALUES ({', '.join('?' * len(REGISTRY_COLUMNS))})",
+                [[_registry_value(entry, c) for c in REGISTRY_COLUMNS] for entry in registry],
             )
+            _build_use_cases(con)
             if snapshot_id is None:
                 snaps = con.execute("SELECT DISTINCT snapshot_id FROM account_evidence").fetchall()
                 snapshot_id = snaps[0][0] if len(snaps) == 1 else None
+            from ..signals.registry import WORDING_VERSION
             con.execute(
                 "CREATE TABLE meta AS SELECT ?::VARCHAR AS snapshot_id, ?::INTEGER AS serving_version, "
-                "?::TIMESTAMP AS built_at, 'internal' AS profile",
-                [snapshot_id, SERVING_VERSION, datetime.now()],
+                "?::TIMESTAMP AS built_at, 'internal' AS profile, ?::INTEGER AS wording_version, "
+                "?::INTEGER AS use_cases_version",
+                [snapshot_id, SERVING_VERSION, datetime.now(), WORDING_VERSION, USE_CASES_VERSION],
             )
             con.execute("CREATE UNIQUE INDEX accounts_id ON accounts (account_id)")
             con.execute("CREATE INDEX account_signals_id ON account_signals (account_id)")
             con.execute("CREATE INDEX account_evidence_id ON account_evidence (account_id)")
+            con.execute("CREATE INDEX account_use_cases_id ON account_use_cases (uc_id, account_id)")
             stats: dict[str, Any] = {
                 t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-                for t in ("accounts", "account_signals", "account_evidence", "signal_registry")
+                for t in ("accounts", "account_signals", "account_evidence", "signal_registry", "account_use_cases")
             }
             con.execute("CHECKPOINT")
         finally:
@@ -202,6 +245,40 @@ def _field(entry: Any, name: str) -> Any:
     if isinstance(entry, dict):
         return entry.get(name)
     return getattr(entry, name, None)
+
+
+def _registry_value(entry: Any, name: str) -> Any:
+    value = _field(entry, name)
+    if name in ("discovery_questions", "confirm_on_call"):
+        return list(value or [])
+    if name == "detail_notes":
+        return json.dumps(dict(value or {}), sort_keys=True)
+    return value
+
+
+def _build_use_cases(con: duckdb.DuckDBPyConnection) -> None:
+    """`account_use_cases`: per account and lens, lens evidence, priority and rank (accounts.use_cases)."""
+    accounts = {r["account_id"]: r for r in _rows(con.execute(
+        "SELECT account_id, segment, eligibility FROM accounts"))}
+    ranked = rank_lenses(lens_rows_sql(con), accounts)
+    con.execute("""CREATE TABLE account_use_cases (
+        account_id VARCHAR, uc_id VARCHAR, uc_signal_ids VARCHAR[], uc_n_services BIGINT, uc_n_ips BIGINT,
+        uc_priority DOUBLE, uc_rank BIGINT, uc_percentile DOUBLE, uc_evidence_quality DOUBLE)""")
+    table = pa.table({
+        "account_id": pa.array([r["account_id"] for r in ranked], pa.string()),
+        "uc_id": pa.array([r["use_case"] for r in ranked], pa.string()),
+        "uc_signal_ids": pa.array([r["signal_ids"] for r in ranked], pa.list_(pa.string())),
+        "uc_n_services": pa.array([r["n_services"] for r in ranked], pa.int64()),
+        "uc_n_ips": pa.array([r["n_ips"] for r in ranked], pa.int64()),
+        "uc_priority": pa.array([r["priority"] for r in ranked], pa.float64()),
+        "uc_rank": pa.array([r["rank"] for r in ranked], pa.int64()),
+        "uc_percentile": pa.array([r["percentile"] for r in ranked], pa.float64()),
+        "uc_evidence_quality": pa.array([r["evidence_quality"] for r in ranked], pa.float64()),
+    })
+    con.register("uc_rows", table)
+    con.execute(f"INSERT INTO account_use_cases SELECT {quote_columns(USE_CASE_COLUMNS)} FROM uc_rows "
+                "ORDER BY uc_id, uc_rank NULLS LAST, account_id")
+    con.unregister("uc_rows")
 
 
 def _rows(cur: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
@@ -244,7 +321,12 @@ class Store:
         return row[0]
 
     def registry(self) -> list[dict[str, Any]]:
-        return self._query(f"SELECT {quote_columns(REGISTRY_COLUMNS)} FROM signal_registry ORDER BY id")
+        rows = self._query(f"SELECT {quote_columns(REGISTRY_COLUMNS)} FROM signal_registry ORDER BY id")
+        for r in rows:
+            r["detail_notes"] = json.loads(r["detail_notes"] or "{}")
+            r["discovery_questions"] = list(r["discovery_questions"] or [])
+            r["confirm_on_call"] = list(r["confirm_on_call"] or [])
+        return rows
 
     # -- accounts -------------------------------------------------------------
 
@@ -256,16 +338,19 @@ class Store:
         tiers: list[str] | None = None,
         countries: list[str] | None = None,
         min_priority: float | None = None,
-        view: str = "actionable",
+        view: str = "research",
         bands: list[str] | None = None,
         ownership: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
+        use_case: str | None = None,
     ) -> tuple[int, list[dict[str, Any]]]:
         """Accounts matching every given filter, by priority rank; returns (total, page).
 
         segment: `enterprise` (default) or `network_provider`; ranks restart per segment.
-        view: `actionable` (default), `review`, `excluded` or `all` (see VIEWS).
+        view: `research` (default), `verify`, `context`, `excluded` or `all` (see VIEWS).
+        use_case: only accounts with evidence for that lens, ordered by the lens rank; each row then
+        carries the `uc_*` lens columns.
         q: case- and accent-insensitive literal substring of name, id or details (`fold_name`).
         signals: account has ALL of them. tiers, bands, ownership, countries: ANY of them.
         """
@@ -274,7 +359,7 @@ class Store:
         where: list[str] = []
         params: list[Any] = []
         if VIEWS[view]:
-            where.append(VIEWS[view])
+            where.append(view_sql(view, use_case))
         if segment:
             where.append("segment = ?")
             params.append(segment)
@@ -299,13 +384,70 @@ class Store:
         if min_priority is not None:
             where.append("opportunity_priority >= ?")
             params.append(min_priority)
+        source, cols, order = "accounts", quote_columns(ACCOUNT_COLUMNS), ACCOUNT_ORDER
+        if use_case:
+            source = "accounts JOIN account_use_cases USING (account_id)"
+            cols += ", " + quote_columns(USE_CASE_COLUMNS[1:])
+            order = "uc_rank NULLS LAST, uc_priority DESC, account_id"
+            where.insert(0, "uc_id = ?")
+            params.insert(0, use_case)
         clause = f"WHERE {' AND '.join(where)}" if where else ""
-        total = self._query(f"SELECT count(*) AS n FROM accounts {clause}", params)[0]["n"]
+        total = self._query(f"SELECT count(*) AS n FROM {source} {clause}", params)[0]["n"]
         items = self._query(
-            f"SELECT {quote_columns(ACCOUNT_COLUMNS)} FROM accounts {clause} ORDER BY {ACCOUNT_ORDER} LIMIT ? OFFSET ?",
+            f"SELECT {cols} FROM {source} {clause} ORDER BY {order} LIMIT ? OFFSET ?",
             params + [limit, offset],
         )
         return total, items
+
+    def use_case_counts(self, segment: str = "enterprise") -> dict[str, dict[str, int]]:
+        """Per lens: accounts with lens evidence by research view (STATE_VIEWS)."""
+        out = {}
+        for uc_id in USE_CASES_BY_ID:
+            cases = ", ".join(f"count_if({view_sql(v, uc_id)}) AS {v}" for v in STATE_VIEWS)
+            out[uc_id] = self._query(
+                f"SELECT count(*) AS total, {cases} FROM accounts JOIN account_use_cases USING (account_id) "
+                "WHERE segment = ? AND uc_id = ?", [segment, uc_id])[0]
+        return out
+
+    def population_sizes(self) -> dict[str, dict[str, Any]]:
+        """Per segment: eligible (ranked) accounts, and ranked accounts per lens."""
+        out: dict[str, dict[str, Any]] = {}
+        for r in self._query("SELECT segment, count(rank) AS n FROM accounts GROUP BY segment"):
+            out[r["segment"]] = {"eligible": r["n"], "lenses": {}}
+        for r in self._query("SELECT segment, uc_id, count(uc_rank) AS n FROM accounts JOIN account_use_cases "
+                             "USING (account_id) GROUP BY segment, uc_id"):
+            out.setdefault(r["segment"], {"eligible": 0, "lenses": {}})["lenses"][r["uc_id"]] = r["n"]
+        return out
+
+    def view_counts(self, segment: str = "enterprise") -> dict[str, int]:
+        cases = ", ".join(f"count_if({VIEWS[v]}) AS {v}" for v in STATE_VIEWS)
+        return self._query(f"SELECT count(*) AS total, {cases} FROM accounts WHERE segment = ?", [segment])[0]
+
+    def locations(self, segment: str = "enterprise", limit: int = 300) -> list[dict[str, Any]]:
+        """Observed infrastructure locations (IP geolocation country codes) by number of research candidates."""
+        return self._query(
+            f"""SELECT c AS country_code, count(*) AS accounts, count_if({VIEWS['research']}) AS research
+                FROM (SELECT unnest(countries) AS c, actionable, eligibility, actionable_blockers, top_signals
+                      FROM accounts WHERE segment = ?)
+                GROUP BY c ORDER BY research DESC, accounts DESC, c LIMIT ?""", [segment, limit])
+
+    def account_use_cases(self, account_id: str) -> list[dict[str, Any]]:
+        return self._query(
+            f"SELECT {quote_columns(USE_CASE_COLUMNS[1:])} FROM account_use_cases WHERE account_id = ? ORDER BY uc_id",
+            [account_id])
+
+    def signals_for_accounts(self, account_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """Per-signal summaries for several accounts at once (list rows' main finding)."""
+        if not account_ids:
+            return {}
+        rows = self._query(
+            f"SELECT {quote_columns(ACCOUNT_SIGNAL_COLUMNS)} FROM account_signals "
+            "WHERE list_contains(?::VARCHAR[], account_id) ORDER BY account_id, contribution DESC NULLS LAST, signal_id",
+            [account_ids])
+        out: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            out.setdefault(r["account_id"], []).append(r)
+        return out
 
     def get_account(self, account_id: str) -> dict[str, Any] | None:
         rows = self._query(f"SELECT {quote_columns(ACCOUNT_COLUMNS)} FROM accounts WHERE account_id = ?", [account_id])

@@ -212,7 +212,7 @@ def test_health(client):
 
 
 def test_accounts_ranked_by_rank(client):
-    assert ids(client.get("/accounts")) == [
+    assert ids(client.get("/accounts", params={"view": "actionable", "view": "actionable"})) == [
         "org:example corp", "dom:acme.com.au", "org:globex:east", "dom:initech.io",
     ]
 
@@ -234,6 +234,7 @@ def test_account_item_shape(client):
             "signal_strength": 0.8,
             "note": "relative priority in this snapshot; not a purchase probability, confirmed vulnerability "
                     "or loss estimate",
+            "summary": "Top 1% of eligible enterprise accounts by exposure.",
         },
         "ownership": {
             "confidence": "high",
@@ -249,8 +250,13 @@ def test_account_item_shape(client):
         },
         "evidence": {"quality": "high", "mean_basis_quality": 0.7},
         "eligibility": {"status": "eligible", "reasons": []},
+        "research_state": {"code": "research_candidate", "label": "Pursue",
+                           "summary": "Strong ownership link and exposed infrastructure. Qualify fit and reach out."},
         "actionable": True,
         "actionable_blockers": [],
+        "use_case": None,
+        "main_finding": {"signal_id": "S01", "name": "Remote access exposed",
+                         "what_we_saw": "2 services on 2 IP addresses: RDP", "context_only": False},
         "top_signals": [{"signal_id": "S01", "name": "Remote access exposed"},
                         {"signal_id": "S03", "name": "Network security appliance exposed"}],
         "signal_ids": ["S01", "S03"],
@@ -289,11 +295,11 @@ def test_views_split_outreach_review_and_excluded(client):
 
 
 def test_band_and_ownership_filters(client):
-    assert ids(client.get("/accounts", params={"band": "High"})) == ["org:example corp", "dom:acme.com.au"]
-    assert ids(client.get("/accounts", params={"ownership": "medium"})) == ["org:globex:east"]
+    assert ids(client.get("/accounts", params={"view": "actionable", "band": "High"})) == ["org:example corp", "dom:acme.com.au"]
+    assert ids(client.get("/accounts", params={"view": "actionable", "ownership": "medium"})) == ["org:globex:east"]
     assert ids(client.get("/accounts", params={"view": "all", "ownership": "low"})) == [
         "org:registry only", "org:leased line customer lan"]
-    assert client.get("/accounts", params={"band": "hot"}).status_code == 422
+    assert client.get("/accounts", params={"view": "actionable", "band": "hot"}).status_code == 422
 
 
 def test_network_provider_segment_is_only_served_when_selected(client):
@@ -306,7 +312,7 @@ def test_network_provider_segment_is_only_served_when_selected(client):
 
 
 def test_pagination_reports_total(client):
-    body = client.get("/accounts", params={"limit": 2, "offset": 1}).json()
+    body = client.get("/accounts", params={"view": "actionable", "limit": 2, "offset": 1}).json()
     assert body["total"] == 4
     assert body["limit"] == 2
     assert body["offset"] == 1
@@ -346,7 +352,7 @@ def test_negative_offset_rejected(client):
     ],
 )
 def test_q_search(client, q, expected):
-    assert ids(client.get("/accounts", params={"q": q})) == expected
+    assert ids(client.get("/accounts", params={"view": "actionable", "q": q})) == expected
 
 
 @pytest.mark.parametrize(
@@ -360,36 +366,36 @@ def test_injection_like_q_is_a_literal(client, q):
 
 
 def test_signal_filter_requires_all_signals(client):
-    assert ids(client.get("/accounts", params=[("signal", "S01"), ("signal", "S03")])) == [
+    assert ids(client.get("/accounts", params=[("view", "actionable"), ("signal", "S01"), ("signal", "S03")])) == [
         "org:example corp", "dom:initech.io",
     ]
-    assert ids(client.get("/accounts", params={"signal": "S16"})) == ["org:globex:east", "dom:initech.io"]
-    assert ids(client.get("/accounts", params=[("signal", "S06"), ("signal", "S16")])) == []
+    assert ids(client.get("/accounts", params={"view": "actionable", "signal": "S16"})) == ["org:globex:east", "dom:initech.io"]
+    assert ids(client.get("/accounts", params=[("view", "actionable"), ("signal", "S06"), ("signal", "S16")])) == []
 
 
 def test_tier_filter_is_any_of(client):
-    assert ids(client.get("/accounts", params={"tier": "B"})) == ["dom:acme.com.au", "dom:initech.io"]
-    assert ids(client.get("/accounts", params=[("tier", "A1"), ("tier", "A2")])) == [
+    assert ids(client.get("/accounts", params={"view": "actionable", "tier": "B"})) == ["dom:acme.com.au", "dom:initech.io"]
+    assert ids(client.get("/accounts", params=[("view", "actionable"), ("tier", "A1"), ("tier", "A2")])) == [
         "org:example corp", "org:globex:east",
     ]
 
 
 def test_country_filter_is_any_of(client):
-    assert ids(client.get("/accounts", params={"country": "NZ"})) == ["dom:acme.com.au"]
-    assert ids(client.get("/accounts", params={"country": "au"})) == ["org:example corp", "dom:acme.com.au"]
-    assert ids(client.get("/accounts", params=[("country", "US"), ("country", "DE")])) == [
+    assert ids(client.get("/accounts", params={"view": "actionable", "country": "NZ"})) == ["dom:acme.com.au"]
+    assert ids(client.get("/accounts", params={"view": "actionable", "country": "au"})) == ["org:example corp", "dom:acme.com.au"]
+    assert ids(client.get("/accounts", params=[("view", "actionable"), ("country", "US"), ("country", "DE")])) == [
         "org:globex:east", "dom:initech.io",
     ]
 
 
 def test_min_priority_is_inclusive(client):
-    assert ids(client.get("/accounts", params={"min_priority": 40})) == [
+    assert ids(client.get("/accounts", params={"view": "actionable", "min_priority": 40})) == [
         "org:example corp", "dom:acme.com.au", "org:globex:east",
     ]
 
 
 def test_filters_combine_and_total_counts_all_matches(client):
-    body = client.get("/accounts", params={"signal": "S01", "country": "AU", "limit": 1}).json()
+    body = client.get("/accounts", params={"view": "actionable", "signal": "S01", "country": "AU", "limit": 1}).json()
     assert body["total"] == 2
     assert [it["account_id"] for it in body["items"]] == ["org:example corp"]
 
@@ -627,10 +633,14 @@ def test_index_serves_salesperson_page(client):
     assert r.headers["content-type"].startswith("text/html")
     html = r.text
     assert '<meta name="viewport"' in html
-    assert "not a purchase probability" in html
-    for label in ("Observed fact", "Inferred risk", "Hypothesis"):
+    # the report: findings and threats first, then reasons, pitch, plan, then evidence
+    for label in ('"Summary"', '"Key threats"', '"Why target them"', '"Recommended pitch"', '"Action plan"',
+                  '"Confirm on the call"', '"Supporting evidence"', '"Observed"'):
         assert label in html
     assert "suppressed_by" in html  # correlated duplicates are explained in the evidence view
+    assert "Prospecting lens" in html and "All supported use cases" in html
+    assert "Observed infrastructure location" in html and "AU, NZ" not in html
+    assert "Actionable outreach" not in html and "Why act" not in html
 
 
 def test_module_app_is_built_from_env(serving_db, monkeypatch):
@@ -691,3 +701,104 @@ def test_q_search_ignores_accents_both_ways(tmp_path):
         assert ids(c.get("/accounts", params={"q": "zürich"})) == ["org:universitat zurich"]
         assert ids(c.get("/accounts", params={"q": "istanbul teknik"})) == ["org:istanbul teknik"]
         assert ids(c.get("/accounts", params={"q": "İstanbul"})) == ["org:istanbul teknik"]
+
+
+# --- research states, use cases and the brief (serving v4, docs/sales-brief.md) ------------------
+
+
+def test_research_views_and_pre_v4_aliases(client):
+    research = ids(client.get("/accounts"))
+    assert client.get("/accounts").json()["view"] == "research"
+    # research candidates need a counted exposure; globex passes the gate on vendor evidence alone
+    assert research == ["org:example corp", "dom:acme.com.au", "dom:initech.io"]
+    assert ids(client.get("/accounts", params={"view": "hygiene"})) == ["org:globex:east"]
+    assert ids(client.get("/accounts", params={"view": "actionable"})) == [
+        "org:example corp", "dom:acme.com.au", "org:globex:east", "dom:initech.io"]
+    assert ids(client.get("/accounts", params={"view": "verify"})) == ["org:registry only"]
+    assert ids(client.get("/accounts", params={"view": "context"})) == []
+    assert ids(client.get("/accounts", params={"view": "review"})) == ["org:registry only"]
+    states = {it["account_id"]: it["research_state"]["code"]
+              for it in client.get("/accounts", params={"view": "all"}).json()["items"]}
+    assert states["org:example corp"] == "research_candidate"
+    assert states["org:globex:east"] == "hygiene_only"
+    assert states["org:registry only"] == "verify_ownership"
+    assert states["org:leased line customer lan"] == "not_a_prospect"
+
+
+def test_use_case_filter_ranks_on_lens_evidence(client):
+    body = client.get("/accounts", params={"use_case": "remote_access", "view": "all"}).json()
+    assert [it["account_id"] for it in body["items"]] == ["org:example corp"]
+    lens = body["items"][0]["use_case"]
+    assert lens == {"id": "remote_access", "name": "Remote access security", "rank": 1, "percentile": 0,
+                    "priority": 50.0, "signal_ids": ["S01"], "n_services": 2, "n_ips": 2, "evidence_quality": 1.0}
+    assert body["items"][0]["priority"]["summary"] == ("Lowest exposure tier of eligible enterprise accounts in "
+                                                       "Remote access security.")
+    cert = ids(client.get("/accounts", params={"use_case": "certificate_management"}))
+    assert cert == ["dom:acme.com.au"]
+    assert client.get("/accounts", params={"use_case": "everything"}).status_code == 422
+
+
+def test_use_cases_endpoint_lists_only_implemented_lenses_with_counts(client):
+    body = client.get("/use-cases").json()
+    by_id = {u["id"]: u for u in body["items"]}
+    assert by_id["remote_access"]["counts"]["research"] == 1
+    assert by_id["remote_access"]["signals"][0]["signal_id"] == "S01"
+    assert by_id["vendor_footprint"]["context_only"] is True
+    assert body["all"]["research"] == len(ids(client.get("/accounts")))
+    assert body["all"]["excluded"] == 1
+
+
+def test_locations_are_labelled_as_ip_geolocation(client):
+    body = client.get("/locations").json()
+    assert "geolocation" in body["note"]
+    au = next(x for x in body["items"] if x["country_code"] == "AU")
+    assert au["research"] == 2  # example corp, acme (registry only is in verify; the pool label is excluded)
+
+
+def test_account_detail_carries_a_brief(client):
+    body = client.get("/accounts/" + quote("org:example corp", safe=":")).json()
+    brief = body["brief"]
+    assert brief["research_state"]["code"] == "research_candidate"
+    assert brief["headline"].startswith("Remote access exposed: 2 services on 2 IP addresses")
+    assert [u["id"] for u in brief["fit"]["use_cases"]] == ["remote_access", "exposure_management"]
+    assert brief["counts"]["services_with_findings"] == 3 and brief["counts"]["all_attributed_services"] == 3
+    assert body["use_cases"][0]["id"] in ("exposure_management", "remote_access")
+    # technical detail is still served for reviewers
+    assert body["explanation"] and body["legacy"]["scoring_version"] == 2
+    assert client.get("/accounts/" + quote("org:example corp", safe=":"),
+                      params={"use_case": "nope"}).status_code == 422
+
+
+def test_certificate_lens_makes_tls_findings_a_research_reason(client):
+    # acme's S06 makes it a certificate-lens research candidate whatever its other signals
+    body = client.get("/accounts", params={"use_case": "certificate_management"}).json()
+    assert [(it["account_id"], it["research_state"]["code"]) for it in body["items"]] == [
+        ("dom:acme.com.au", "research_candidate")]
+    counts = {u["id"]: u["counts"] for u in client.get("/use-cases").json()["items"]}
+    assert counts["certificate_management"]["hygiene"] == 0
+
+
+def test_lens_sql_aggregation_matches_the_python_reference():
+    import random
+
+    import duckdb
+    import pyarrow as pa
+
+    from firmable.accounts.use_cases import lens_rows, lens_rows_sql
+    rng = random.Random(7)
+    sigs = ["S01", "S03", "S04", "S05", "S06", "S16"]
+    rows = []
+    for n in range(3000):
+        signal = rng.choice(sigs)
+        counted = rng.random() < 0.8
+        rows.append(dict(account_id=f"a{rng.randrange(150)}", signal_id=signal, service_id=f"s{rng.randrange(900)}",
+                         ip=f"10.0.{rng.randrange(4)}.{rng.randrange(60)}", counted=counted,
+                         suppressed_by=None if counted else rng.choice(sigs),
+                         match_basis=rng.choice(["product", "protocol", "tls", "waf", "title", "tag", None])))
+    # one service belongs to one account, as in the roll-up
+    owner = {}
+    for r in rows:
+        r["account_id"] = owner.setdefault(r["service_id"], r["account_id"])
+    with duckdb.connect() as con:
+        con.register("ev", pa.Table.from_pylist(rows))
+        assert lens_rows_sql(con, "ev") == lens_rows(rows)

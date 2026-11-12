@@ -27,6 +27,8 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 
 from firmable.logs import log
 
+from firmable.accounts.use_cases import USE_CASES, USE_CASES_BY_ID
+from firmable.api.brief import build_brief, main_finding, priority_sentence, research_state_ref
 from firmable.api.store import SERVING_VERSION, Store
 from firmable.api.wording import render_fact
 
@@ -66,10 +68,29 @@ DISCLAIMER = (
 )
 PRIORITY_NOTE = "relative priority in this snapshot; not a purchase probability, confirmed vulnerability or loss estimate"
 POPULATION = {"enterprise": "eligible enterprise accounts", "network_provider": "network-provider accounts"}
+UseCaseId = Literal[tuple(u.id for u in USE_CASES)]  # type: ignore[valid-type]
+View = Literal["research", "hygiene", "verify", "context", "excluded", "all", "actionable", "review"]
 
 
 def _signal_ref(signal_id: str, names: dict[str, str]) -> dict[str, Any]:
     return {"signal_id": signal_id, "name": names.get(signal_id)}
+
+
+def _use_case_item(row: dict[str, Any]) -> dict[str, Any] | None:
+    if row.get("uc_id") is None:
+        return None
+    pct = row["uc_percentile"]
+    return {
+        "id": row["uc_id"],
+        "name": USE_CASES_BY_ID[row["uc_id"]].name,
+        "rank": row["uc_rank"],
+        "percentile": None if pct is None else int(pct),
+        "priority": row["uc_priority"],
+        "signal_ids": list(row["uc_signal_ids"] or []),
+        "n_services": row["uc_n_services"],
+        "n_ips": row["uc_n_ips"],
+        "evidence_quality": row["uc_evidence_quality"],
+    }
 
 
 def _account_item(row: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
@@ -106,6 +127,7 @@ def _account_item(row: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
             "mean_basis_quality": row["evidence_quality"],
         },
         "eligibility": {"status": row["eligibility"], "reasons": list(row["eligibility_reasons"] or [])},
+        "research_state": research_state_ref(row),
         "actionable": row["actionable"],
         "actionable_blockers": list(row["actionable_blockers"] or []),
         "top_signals": [_signal_ref(sid, names) for sid in (row["top_signals"] or [])],
@@ -288,7 +310,10 @@ def create_app(
         raise RuntimeError(f"serving DB {db_path} has serving_version {found}, this app needs {SERVING_VERSION}: "
                            "rebuild it with `firmable build-phase3 SNAPSHOT --steps accounts serving`")
     app.state.store = store
-    signal_names = {r["id"]: r["name"] for r in store.registry()}
+    registry = {r["id"]: r for r in store.registry()}
+    signal_names = {k: r["name"] for k, r in registry.items()}
+    snapshot_id = store.meta()["snapshot_id"]
+    sizes = store.population_sizes()
 
     @app.middleware("http")
     async def access_controls(request: Request, call_next):
@@ -327,8 +352,12 @@ def create_app(
         signal: list[str] = Query(default_factory=list),
         tier: list[str] = Query(default_factory=list),
         country: list[str] = Query(default_factory=list),
-        view: Literal["actionable", "review", "excluded", "all"] = Query(
-            "actionable", description="actionable outreach list (default), review queue, excluded, or all"),
+        view: View = Query(
+            "research", description="research candidates (default), hygiene (certificate findings only), verify "
+            "ownership first, context only, excluded (not a prospect) or all; `actionable` and `review` are "
+            "pre-v4 aliases"),
+        use_case: UseCaseId | None = Query(
+            None, description="only accounts with evidence for this product use case, ranked on that evidence"),
         band: list[Literal["High", "Medium", "Low"]] = Query(default_factory=list),
         ownership: list[Literal["high", "medium", "low"]] = Query(default_factory=list),
         min_priority: float | None = Query(None, ge=0, le=100),
@@ -337,10 +366,40 @@ def create_app(
     ) -> dict[str, Any]:
         total, rows = store.search_accounts(
             q=q, segment=segment, signals=signal, tiers=tier, countries=country, min_priority=min_priority,
-            view=view, bands=list(band), ownership=list(ownership), limit=limit, offset=offset,
+            view=view, bands=list(band), ownership=list(ownership), limit=limit, offset=offset, use_case=use_case,
         )
-        return {"total": total, "limit": limit, "offset": offset, "view": view,
-                "items": [_account_item(r, signal_names) for r in rows]}
+        sigs = store.signals_for_accounts([r["account_id"] for r in rows])
+        items = []
+        for r in rows:
+            item = _account_item(r, signal_names)
+            item["research_state"] = research_state_ref(r, use_case)
+            lens = _use_case_item(r)
+            item["use_case"] = lens
+            item["main_finding"] = main_finding(sigs.get(r["account_id"], []), registry, use_case)
+            item["priority"]["summary"] = priority_sentence(r, POPULATION.get(r["segment"]), r if lens else None)
+            items.append(item)
+        return {"total": total, "limit": limit, "offset": offset, "view": view, "use_case": use_case,
+                "items": items}
+
+    @app.get("/use-cases")
+    def use_cases(segment: Literal["enterprise", "network_provider"] = Query("enterprise")) -> dict[str, Any]:
+        """Product use cases backed by implemented signals, with account counts per research state."""
+        counts = store.use_case_counts(segment)
+        empty = {"total": 0, "research": 0, "hygiene": 0, "verify": 0, "context": 0, "excluded": 0}
+        return {
+            "segment": segment,
+            "all": store.view_counts(segment),
+            "items": [{"id": u.id, "name": u.name, "description": u.description, "context_only": u.context_only,
+                       "signals": [{"signal_id": s, "name": registry[s]["short_name"] if s in registry else s}
+                                   for s in u.signals],
+                       "counts": counts.get(u.id, empty)} for u in USE_CASES],
+        }
+
+    @app.get("/locations")
+    def locations(segment: Literal["enterprise", "network_provider"] = Query("enterprise")) -> dict[str, Any]:
+        """Observed infrastructure locations: IP-geolocation countries, not company headquarters."""
+        return {"segment": segment, "note": "IP geolocation of the account's services, not the organisation's "
+                "headquarters.", "items": store.locations(segment)}
 
     @app.get("/signals")
     def signals() -> dict[str, Any]:
@@ -382,11 +441,13 @@ def create_app(
         }
 
     @app.get("/accounts/{account_id:path}")
-    def account_detail(account_id: str, request: Request) -> Any:
+    def account_detail(account_id: str, request: Request,
+                       use_case: UseCaseId | None = Query(None, description="order findings for this use case")) -> Any:
         row = store.get_account(account_id)
         if row is None:
             return _successor_or_404(account_id, "", request)
         body = _account_item(row, signal_names)
+        body["research_state"] = research_state_ref(row, use_case)
         body["explanation"] = list(row["explanation"] or [])
         body["scoring_version"] = row["scoring_version"]
         body["eligibility_version"] = row["eligibility_version"]
@@ -394,6 +455,12 @@ def create_app(
             {**s, "details": list(s["details"] or []), "sub_flags": list(s["sub_flags"] or [])}
             for s in store.account_signals(account_id)
         ]
+        lenses = store.account_use_cases(account_id)
+        body["use_cases"] = [_use_case_item(x) for x in lenses]
+        size = sizes.get(row["segment"], {})
+        body["brief"] = build_brief(row, body["signals"], registry, lenses, snapshot_id,
+                                    POPULATION.get(row["segment"]), use_case, lens_sizes=size.get("lenses"),
+                                    population_size=size.get("eligible"))
         body["labels"] = LABELS
         body["disclaimer"] = DISCLAIMER
         return body

@@ -15,7 +15,8 @@ from typing import Any
 
 import duckdb
 
-from .store import ACCOUNT_COLUMNS, ACCOUNT_ORDER, ACCOUNT_SIGNAL_COLUMNS, EVIDENCE_COLUMNS, REGISTRY_COLUMNS, quote_columns
+from .store import (ACCOUNT_COLUMNS, ACCOUNT_ORDER, ACCOUNT_SIGNAL_COLUMNS, EVIDENCE_COLUMNS, REGISTRY_COLUMNS,
+                    REGISTRY_DDL, USE_CASE_COLUMNS, quote_columns)
 
 MIN_ATTRIBUTION_VERSION = 2          # NTLM-restricted attribution
 INTERNAL_ONLY = {"file_id": "VARCHAR", "byte_offset": "BIGINT", "byte_length": "INTEGER"}  # nulled
@@ -58,9 +59,13 @@ def publish_public_db(src: str | Path, out_path: str | Path) -> dict[str, Any]:
                         "FROM s.account_signals ORDER BY account_id, contribution DESC, signal_id")
             con.execute(f"CREATE TABLE account_evidence AS SELECT {ev_cols} FROM s.account_evidence "
                         "ORDER BY account_id, signal_id, counted DESC, ip, port, transport, sni, service_id")
-            con.execute(f"CREATE TABLE signal_registry AS SELECT {quote_columns(REGISTRY_COLUMNS)} FROM s.signal_registry")
+            con.execute(REGISTRY_DDL)
+            con.execute(f"INSERT INTO signal_registry SELECT {quote_columns(REGISTRY_COLUMNS)} FROM s.signal_registry")
+            con.execute(f"CREATE TABLE account_use_cases AS SELECT {quote_columns(USE_CASE_COLUMNS)} "
+                        "FROM s.account_use_cases ORDER BY uc_id, uc_rank NULLS LAST, account_id")
             con.execute("""CREATE TABLE meta AS
-                           SELECT snapshot_id, serving_version, ?::TIMESTAMP AS built_at, 'public' AS profile
+                           SELECT snapshot_id, serving_version, ?::TIMESTAMP AS built_at, 'public' AS profile,
+                                  wording_version, use_cases_version
                            FROM s.meta""", [datetime.now()])
             con.execute("DETACH s")
             cols = [c for (c,) in con.execute("SELECT column_name FROM information_schema.columns").fetchall()]
@@ -70,8 +75,10 @@ def publish_public_db(src: str | Path, out_path: str | Path) -> dict[str, Any]:
             con.execute("CREATE UNIQUE INDEX accounts_id ON accounts (account_id)")
             con.execute("CREATE INDEX account_signals_id ON account_signals (account_id)")
             con.execute("CREATE INDEX account_evidence_id ON account_evidence (account_id)")
+            con.execute("CREATE INDEX account_use_cases_id ON account_use_cases (uc_id, account_id)")
             stats = {t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-                     for t in ("accounts", "account_signals", "account_evidence", "signal_registry")}
+                     for t in ("accounts", "account_signals", "account_evidence", "signal_registry",
+                               "account_use_cases")}
             con.execute("CHECKPOINT")
         finally:
             con.close()

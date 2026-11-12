@@ -52,12 +52,19 @@ All responses are JSON except `GET /`. `limit` defaults to 50; values outside 1â
 |---|---|
 | `GET /` | The salesperson page (`src/firmable/api/static/index.html`) |
 | `GET /health` | `{status, snapshot_id, n_accounts}` |
-| `GET /signals` | `{labels, signals:[{id, version, name, family, observed_fact_template, inferred_risk, hypothesis, infra_exposure}]}` |
-| `GET /accounts` | `{total, limit, offset, view, items:[account]}` in priority-rank order (scoring v3, `docs/ranking-v3.md`) |
-| `GET /accounts/{account_id}` | account + `explanation`, `scoring_version`, `eligibility_version`, `signals` (per-signal summary with registry name, inferred risk, hypothesis), `labels`, `disclaimer`; 307 to the current id for an id from an older build (see below), else 404 |
+| `GET /signals` | `{labels, signals:[{id, version, name, family, observed_fact_template, inferred_risk, hypothesis, infra_exposure, short_name, conversation_angle, discovery_questions, unknowns, detail_notes}]}` |
+| `GET /accounts` | `{total, limit, offset, view, use_case, items:[account]}` in priority-rank order (scoring v3, `docs/ranking-v3.md`), or lens-rank order with `use_case`. Each item adds `research_state`, `main_finding`, `use_case` (lens rank, priority, IPs; null without a lens) and `priority.summary` (serving v4, `docs/sales-brief.md`) |
+| `GET /accounts/{account_id}` | account + `brief` (salesperson brief; `?use_case=` orders its findings), `use_cases`, `explanation`, `scoring_version`, `eligibility_version`, `signals` (per-signal summary with registry name, inferred risk, hypothesis), `labels`, `disclaimer`; 307 to the current id for an id from an older build (see below), else 404 |
+| `GET /use-cases` | `{segment, all:{total, research, verify, context, excluded}, items:[{id, name, description, context_only, signals, counts}]}` |
+| `GET /locations` | `{segment, note, items:[{country_code, accounts, research}]}`: IP-geolocation countries, not headquarters |
 | `GET /accounts/{account_id}/evidence` | `{account_id, total, limit, offset, labels, disclaimer, items:[evidence]}`; 307 for an older id, else 404 |
 
 ### `/accounts` filters
+
+`view` is `research` (default), `verify`, `context`, `excluded` or `all`; `actionable` (= `research`)
+and `review` (= `verify` + `context`) are pre-v4 aliases. `use_case` is one of `remote_access`,
+`exposure_management`, `data_security`, `admin_consoles`, `certificate_management`,
+`vendor_footprint` (422 otherwise).
 
 | Param | Meaning |
 |---|---|

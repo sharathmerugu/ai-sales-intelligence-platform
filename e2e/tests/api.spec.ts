@@ -46,7 +46,7 @@ test("segment filter is validated", async ({ request }) => {
 // Scoring v3 (docs/ranking-v3.md): priority and ownership are separate fields; no bare score.
 test("account items keep priority, ownership and evidence apart and carry the legacy score separately", async ({ request }) => {
   const body = await (await request.get("/accounts?limit=50")).json();
-  expect(body.view).toBe("actionable");
+  expect(body.view).toBe("research");
   for (const a of body.items) {
     expect(a.score).toBeUndefined();
     expect(a.components).toBeUndefined();
@@ -56,6 +56,7 @@ test("account items keep priority, ownership and evidence apart and carry the le
     expect(["high", "medium"]).toContain(a.ownership.confidence);
     expect(a.priority.confidence).toBeUndefined();
     expect(a.actionable).toBe(true);
+    expect(a.research_state.code).toBe("research_candidate");
     expect(a.legacy.scoring_version).toBe(2);
   }
   const ranks = body.items.map((a: any) => a.rank);
@@ -79,4 +80,19 @@ test("views and filters are validated; excluded accounts are unranked", async ({
     expect(a.actionable).toBe(false);
     expect(a.actionable_blockers.length).toBeGreaterThan(0);
   }
+});
+
+// Serving v4: use cases come only from implemented signals; locations are IP geolocation.
+test("use cases and locations", async ({ request }) => {
+  const uc = await (await request.get("/use-cases")).json();
+  expect(uc.items.map((u: any) => u.id)).toEqual(["remote_access", "exposure_management", "data_security",
+    "admin_consoles", "certificate_management", "vendor_footprint"]);
+  for (const u of uc.items) expect(u.counts.total).toBeGreaterThan(0);
+  const lens = await (await request.get("/accounts?use_case=remote_access&limit=20")).json();
+  const ranks = lens.items.map((a: any) => a.use_case.rank);
+  expect(ranks).toEqual([...ranks].sort((x: number, y: number) => x - y));
+  for (const a of lens.items) expect(a.use_case.signal_ids.every((s: string) => ["S01", "S03"].includes(s))).toBe(true);
+  expect((await request.get("/accounts?use_case=everything")).status()).toBe(422);
+  const loc = await (await request.get("/locations")).json();
+  expect(loc.note).toContain("geolocation");
 });

@@ -1,87 +1,96 @@
 import { expect, test } from "@playwright/test";
 
-// Salesperson workflow on the deployed page: outreach list, views, filters, segment, account, evidence.
-// Scoring v3: priority, ownership and evidence are separate columns; there is no score column.
+// Salesperson workflow (serving v4, docs/sales-brief.md): prospecting lens, research states,
+// plain-language list, five-question brief, endpoint records on demand, technical detail collapsed.
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#rows tr").first()).toBeVisible();
-  await expect(page.locator("#snapshot")).toContainText("Snapshot 2026-11-07");
+  await expect(page.locator("#snapshot")).toContainText("2026-11-07");
 });
 
-test("outreach list loads with separate priority, ownership and evidence and no network providers", async ({ page }) => {
+test("research list loads in plain language with no internal codes or network providers", async ({ page }) => {
   const rows = page.locator("#rows tr");
   await expect(rows).toHaveCount(50);
   await expect(rows.first().locator("td").first()).toHaveText("1");
   await expect(page.locator("#count")).toContainText("1–50 of");
-  await expect(page.locator("#rows")).not.toContainText("net:");
   const headers = await page.locator("thead th").allTextContents();
-  expect(headers.map((h) => h.trim())).toEqual(["#", "Account", "Priority", "Ownership", "Evidence", "Top signals"]);
-  await expect(rows.first().locator("td").nth(2)).toContainText(/High|Medium|Low/);
-  await expect(rows.first().locator("td").nth(2)).toContainText(/above \d+%/);
-  await expect(rows.first().locator("td").nth(3)).toContainText(/high|medium/);
-  await expect(rows.first()).toContainText("actionable");
+  expect(headers.map((h) => h.trim())).toEqual(["#", "Account", "Main finding", "Ownership", "Status"]);
+  await expect(page.getByLabel("Prospecting lens")).toHaveValue("");
+  await expect(page.getByLabel("Prospecting lens").locator("option").first()).toContainText("All supported use cases");
+  await expect(page.locator("#lens-help")).toHaveText("Choose a use case to narrow the research list.");
+  await expect(rows.first()).toContainText("Pursue");
+  const listText = await page.locator("#rows").innerText();
+  expect(listText).not.toMatch(/\bS\d\d\b/);
+  expect(listText).not.toContain("net:");
+  expect(listText).not.toMatch(/actionable/i);
+  await expect(page.locator("input[name=country]")).toHaveValue("");
+  await expect(page.getByLabel("Observed infrastructure location")).toBeVisible();
 });
 
-test("review and excluded views are separate from the outreach list", async ({ page }) => {
-  await page.getByLabel("View").selectOption("review");
-  await expect(page.locator("#rows tr").first()).toContainText("review:");
-  await page.getByLabel("View").selectOption("excluded");
-  await expect(page.locator("#rows tr").first()).toContainText("excluded: not a prospect");
+test("a use case narrows and re-ranks the list", async ({ page }) => {
+  await page.getByLabel("Prospecting lens").selectOption("data_security");
+  await expect(page.locator("#lens-help")).toContainText("Database");
+  await expect(page.locator("#rows tr").first().locator("td").nth(2)).toContainText("Exposed data stores");
+  await expect(page.locator("#list-note")).toContainText("ranked on exposed data stores evidence only");
+});
+
+test("statuses are separate lists", async ({ page }) => {
+  await page.getByLabel("Status").selectOption("hygiene");
+  await expect(page.locator("#rows tr").first()).toContainText("Pursue for certificate management");
+  await page.getByLabel("Status").selectOption("verify");
+  await expect(page.locator("#rows tr").first()).toContainText("Confirm ownership first");
+  await page.getByLabel("Status").selectOption("context");
+  await expect(page.locator("#rows tr").first()).toContainText("Monitor");
+  await page.getByLabel("Status").selectOption("excluded");
+  await expect(page.locator("#rows tr").first()).toContainText("Do not pursue");
   await expect(page.locator("#rows tr").first().locator("td").first()).toHaveText("—");
 });
 
 test("search narrows the list", async ({ page }) => {
   await page.getByRole("searchbox").fill("university");
-  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(page.locator("#rows tr").first()).toContainText(/universi/i);
   const count = await page.locator("#count").textContent();
   expect(Number(count!.split(" of ")[1])).toBeGreaterThan(10);
 });
 
-test("signal, tier and country filters apply", async ({ page }) => {
-  await page.locator("input[name=signal][value=S01]").check();
-  await page.locator("input[name=tier][value=A1]").check();
-  await page.locator("input[name=country]").fill("US");
-  await page.getByRole("button", { name: "Search" }).click();
-  await expect(page.locator("#rows tr").first().locator("td").nth(3)).toContainText("tier A1");
-  await expect(page.locator("#rows tr").first()).toContainText("S01");
-});
-
-test("network-provider segment is separate and explicitly selected", async ({ page }) => {
-  await page.getByLabel("Segment").selectOption("network_provider");
-  await expect(page.locator("#rows tr").first()).toContainText("net:");
-  await expect(page.locator("#rows tr").first().locator("td").nth(3)).toContainText("tier P");
-});
-
-test("account detail explains the priority and shows fact, risk and hypothesis separately", async ({ page }) => {
+test("account report leads with findings, threats, reasons, pitch and plan; evidence below", async ({ page }) => {
   await page.locator("#rows tr").first().click();
   const detail = page.locator("#detail");
   await expect(detail.locator("h2")).toBeVisible();
-  await expect(detail).toContainText("not a purchase probability");
-  await expect(detail).toContainText("Why this priority");
-  await expect(detail.locator("dl.kv").first()).toContainText("Ownership");
-  await expect(detail.locator("dl.kv").first()).toContainText("Evidence quality");
-  await expect(detail).toContainText("Legacy v2 score (comparison only)");
-  await expect(detail.locator("li").filter({ hasText: /^Ownership confidence/ })).toContainText("not verified");
-  const card = detail.locator(".card").filter({ hasText: "Observed fact" }).first();
-  await expect(card).toContainText("Observed fact");
-  await expect(card).toContainText("Inferred risk");
-  await expect(card).toContainText("Hypothesis");
-  await card.locator("summary").click();
-  await expect(card).toContainText("SHA-256");
-  await expect(card).toContainText("withheld in this deployment");
+  await expect(detail.locator(".status-bar")).toContainText("Pursue");
+  await expect(detail.locator("#priority-line")).toContainText(/Top \d+% of [\d,]+ organisations by exposure/);
+  const headings = (await detail.locator("h3").allTextContents()).map((h) => h.trim().toLowerCase());
+  expect(headings.slice(0, 6)).toEqual(["summary", "key threats", "why target them", "recommended pitch",
+                                        "action plan", "confirm on the call"]);
+  expect(headings).toContain("supporting evidence");
+  await expect(detail.locator("blockquote")).toBeVisible();
+  const report = await detail.innerText();
+  expect(report).not.toMatch(/\b(may|might|not observed|not a weakness)\b/i);
+  // technical detail is collapsed, not in the report
+  await expect(detail.getByText(/100 × relevance/)).toBeHidden();
+  // endpoint records on demand, with provenance
+  const bucket = detail.locator("details.finding").first();
+  await bucket.locator("summary").click();
+  await bucket.getByRole("button", { name: /Show endpoint records/ }).click();
+  const record = bucket.locator(".records .card").first();
+  await expect(record).toContainText("Observed");
+  await record.locator("summary").click();
+  await expect(record).toContainText("SHA-256");
+  await expect(record).toContainText("withheld in this deployment");
 });
 
 test("deep link opens an account", async ({ page }) => {
-  const id = await page.locator("#rows tr").nth(2).locator(".acct-id").textContent();
+  const id = await page.locator("#rows tr").nth(2).getAttribute("data-id");
   await page.goto(`/#account=${encodeURIComponent(id!)}`);
+  await page.locator("#detail details.technical > summary").click();
   await expect(page.locator("#detail")).toContainText(id!);
 });
 
 test("pagination moves to the next page", async ({ page }) => {
   await page.getByRole("button", { name: "Next" }).click();
   await expect(page.locator("#count")).toContainText("51–100 of");
-  // ranks may skip accounts held for review, but never go backwards
+  // ranks may skip accounts in other research states, but never go backwards
   const first = Number(await page.locator("#rows tr").first().locator("td").first().textContent());
   expect(first).toBeGreaterThanOrEqual(51);
 });

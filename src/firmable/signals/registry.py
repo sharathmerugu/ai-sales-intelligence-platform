@@ -29,6 +29,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 SIGNALS_VERSION = 1
+# Sales-facing wording version (names, threat text, pitch, opener, discovery questions, items to
+# confirm on the call, per-detail notes). Detection rules are unchanged by a wording change, so
+# `Signal.version` stays put. v2: no legacy / missing-tool / renewal hypotheses; narrow observations
+# such as SQL Server Browser keep their exact scope. v3: direct report language: threats stated at
+# the device-class level, a pitch and an opener per signal, open questions turned into checks for the
+# call (docs/sales-brief.md). Never a claim that the account is vulnerable, breached or buying.
+WORDING_VERSION = 3
 
 # Placeholders the API may fill from a signal_hits row when rendering a fact.
 FACT_PLACEHOLDERS = frozenset(
@@ -51,6 +58,18 @@ class Signal:
     inferred_risk: str
     hypothesis: str
     infra_exposure: bool
+    # Sales-facing wording (WORDING_VERSION). Plain, direct language; no signal codes, no jargon.
+    # `inferred_risk` above is the threat statement shown to salespeople.
+    short_name: str = ""
+    noun_one: str = ""            # "remote-access gateway service"
+    noun_many: str = ""           # "remote-access gateway services"
+    offering: str = ""            # the solution area to lead with
+    pitch: str = ""               # the argument for the salesperson
+    opener: str = ""              # first line to the prospect; {details} = products seen
+    discovery_questions: tuple[str, ...] = ()
+    confirm_on_call: tuple[str, ...] = ()   # facts the scan does not capture; check them on the call
+    # (detail label, note): exactly what a narrow observation is
+    detail_notes: tuple[tuple[str, str], ...] = ()
 
 
 # --------------------------------------------------------------------------- helpers
@@ -151,14 +170,43 @@ S01 = Signal(
         "(product '{product}', title '{http_title}')."
     ),
     inferred_risk=(
-        "A perimeter remote-access gateway or firewall portal is internet-reachable; this device class is commonly "
-        "targeted. Exposure to any specific flaw depends on the firmware version, which is usually not observed."
+        "Internet-facing VPN and firewall gateways are the most exploited entry point into corporate networks. "
+        "SonicWall, Fortinet, Ivanti, Citrix, Palo Alto and Cisco gateways have all shipped critical flaws that "
+        "ransomware and state-backed groups exploited at scale, and many sit in CISA's Known Exploited "
+        "Vulnerabilities catalogue. One unpatched gateway is a direct path into the internal network."
     ),
     hypothesis=(
-        "The account may run a legacy VPN and may be a candidate for ZTNA/SASE, MFA or firewall refresh; "
-        "this needs firmographic and timing confirmation."
+        "The account may be reviewing how remote access through this gateway is secured."
     ),
     infra_exposure=True,
+    short_name="Remote-access gateways",
+    noun_one="remote-access gateway service",
+    noun_many="remote-access gateway services",
+    offering="Remote access security (ZTNA, MFA, gateway hardening)",
+    pitch=(
+        "Remote access runs through internet-facing gateways, the device class attackers target first. Lead with "
+        "taking that edge off the internet (zero-trust access) or hardening it: patch visibility, MFA on every "
+        "login and continuous monitoring of the gateway."
+    ),
+    opener=(
+        "Your remote access runs through internet-facing {details} gateways, the first systems attackers probe. "
+        "We help security teams lock that edge down without disrupting remote work."
+    ),
+    discovery_questions=(
+        "Who owns the remote-access gateways, and who patches them?",
+        "How fast do you apply gateway firmware advisories today?",
+        "Is MFA enforced on every VPN login, including contractors?",
+        "Is a move to zero-trust access on your roadmap?",
+    ),
+    confirm_on_call=(
+        "Gateway firmware version and patch level",
+        "MFA coverage on VPN logins",
+        "Whether IT or a managed provider runs the gateways",
+    ),
+    detail_notes=(
+        ("SSL VPN portal (unbranded)", "VPN login portal identified by its page title; the vendor is not named "
+         "on the page."),
+    ),
 )
 
 
@@ -196,14 +244,39 @@ S03 = Signal(
         "(scanner module '{module}', product '{product}')."
     ),
     inferred_risk=(
-        "An interactive login surface is internet-reachable; this exposure class is commonly targeted by "
-        "brute-force and credential attacks. No authentication weakness is observed."
+        "RDP, VNC, Telnet and similar admin logins open to the internet are a top initial-access route for "
+        "ransomware. Attackers brute-force and credential-stuff these logins continuously; each exposed host is "
+        "a login prompt straight into the network."
     ),
     hypothesis=(
-        "The account may lack a remote-access broker, PAM or ZTNA control in front of this host; "
-        "this needs confirmation."
+        "The account may want to review how interactive administration access is exposed."
     ),
     infra_exposure=True,
+    short_name="Remote-administration logins",
+    noun_one="remote-administration login",
+    noun_many="remote-administration logins",
+    offering="Privileged access management and zero-trust admin access",
+    pitch=(
+        "Admin logins are open directly to the internet. Lead with putting administrative access behind a broker "
+        "with MFA and session recording, so these ports can be closed."
+    ),
+    opener=(
+        "{details} logins are open to the internet on {n_ips} of your addresses. We help teams move admin access "
+        "behind MFA and a broker so those ports can close."
+    ),
+    discovery_questions=(
+        "Which teams or vendors connect over RDP or VNC from outside?",
+        "How is administrative access brokered, logged and protected with MFA today?",
+        "Who signs off on opening admin ports to the internet?",
+    ),
+    confirm_on_call=(
+        "MFA and account lockout on these logins",
+        "Network restrictions on who can connect",
+        "What each exposed host does",
+    ),
+    detail_notes=(
+        ("Telnet", "Telnet sends usernames and passwords unencrypted."),
+    ),
 )
 
 
@@ -247,7 +320,7 @@ _S04_T = f"(list_contains(tags_l, 'database') AND NOT regexp_matches(p_l, {_q(WE
 S04 = Signal(
     id="S04",
     version=1,
-    name="Database / object store reachable",
+    name="Database, object-store or database-discovery service answering",
     family="exposure",
     predicate_sql=f"NOT cdn AND ({_S04_P} OR {_S04_M} OR {_S04_T})",
     detail_sql=_label_case(
@@ -263,17 +336,46 @@ S04 = Signal(
         "'database_tag', list_contains(tags_l, 'database'))"
     ),
     observed_fact_template=(
-        "On {observed_at} UTC, {ip}:{port}/{transport} returned a {detail} data-store response "
+        "On {observed_at} UTC, {ip}:{port}/{transport} returned a {detail} response "
         "(scanner module '{module}', product '{product}', version '{version}')."
     ),
     inferred_risk=(
-        "Data infrastructure is reachable from the internet. Whether authentication is enforced is not observed."
+        "Databases and object stores reachable from the internet are a leading cause of data breaches: one "
+        "misconfigured instance or weak password exposes records directly, with no malware involved. Automated "
+        "scanners find and raid open data stores within hours."
     ),
     hypothesis=(
-        "The account may have a cloud or database security posture gap (CSPM/DSPM, database security, "
-        "backup resilience); this needs confirmation."
+        "The account may want to review which data services are internet-reachable."
     ),
     infra_exposure=True,
+    short_name="Exposed data stores",
+    noun_one="data-store service",
+    noun_many="data-store services",
+    offering="Data security posture (DSPM, database security)",
+    pitch=(
+        "Data infrastructure is reachable from the internet. Lead with finding every internet-facing data store, "
+        "closing the ones that should be private and monitoring access to the rest."
+    ),
+    opener=(
+        "{details} services on your network answer from the public internet. We help teams find every exposed "
+        "data store and lock down the ones that should be private."
+    ),
+    discovery_questions=(
+        "Should these database and storage endpoints be reachable from the internet?",
+        "How do you find data stores that teams stand up outside the standard process?",
+        "Who owns database access policy?",
+    ),
+    confirm_on_call=(
+        "Authentication on each exposed data store",
+        "What data the instances hold",
+        "Whether each endpoint is production or test",
+    ),
+    detail_notes=(
+        ("SQL Server Browser", "SQL Server Browser (UDP 1434) is exposed. It lists SQL Server instance names and "
+         "ports to anyone who asks, giving attackers a map of the database estate."),
+        ("MinIO", "MinIO object storage (API or admin console) is reachable from the internet."),
+        ("Database (scanner tag)", "Flagged as a database by the scanner; the product is not named."),
+    ),
 )
 
 
@@ -342,14 +444,42 @@ S05 = Signal(
         "interface (product '{product}', title '{http_title}')."
     ),
     inferred_risk=(
-        "An infrastructure or DevOps control plane is internet-reachable. A login page proves reachability only; "
-        "authentication bypass is not observed."
+        "Internet-facing admin consoles (GitLab, Jenkins, Kubernetes, hypervisors, hosting panels, out-of-band "
+        "management) give attackers a login page to the systems that control everything else. Taking over one "
+        "console means control of builds, servers or infrastructure."
     ),
     hypothesis=(
-        "The account may have exposure-management, PAM or shadow-IT gaps around this management plane; "
-        "hosting panels may belong to the hoster rather than the prospect."
+        "The account may want to review which management consoles are internet-reachable."
     ),
     infra_exposure=True,
+    short_name="Exposed admin consoles",
+    noun_one="admin console",
+    noun_many="admin consoles",
+    offering="Attack surface management",
+    pitch=(
+        "Management consoles are reachable from the internet. Lead with continuous discovery of internet-facing "
+        "consoles and moving them behind SSO and private access."
+    ),
+    opener=(
+        "Your {details} admin consoles are reachable from the internet. We help teams discover every exposed "
+        "console and move it behind SSO and private access."
+    ),
+    discovery_questions=(
+        "Should these consoles be reachable from the internet?",
+        "How do you discover new internet-facing services before attackers do?",
+    ),
+    confirm_on_call=(
+        "SSO and MFA on each console",
+        "Whether the account or its hosting provider runs each console",
+    ),
+    detail_notes=(
+        ("WHM/cPanel", "Hosting control panel: usually run by the hosting provider. Confirm the customer controls "
+         "it before citing it."),
+        ("Plesk", "Hosting control panel: usually run by the hosting provider. Confirm the customer controls it "
+         "before citing it."),
+        ("Management plane (scanner tag)", "Flagged as a management interface by the scanner; the product is not "
+         "named."),
+    ),
 )
 
 
@@ -393,14 +523,39 @@ S06 = Signal(
         "(all findings: {sub_flags})."
     ),
     inferred_risk=(
-        "Weak TLS or certificate hygiene on this endpoint; expired, self-signed or weak certificates on "
-        "user-facing services are commonly associated with certificate-lifecycle debt."
+        "Expired, self-signed or weak certificates and old TLS versions trigger browser warnings, break partner "
+        "integrations, fail PCI DSS and ISO 27001 audits and leave traffic open to interception and downgrade "
+        "attacks. They also show certificates are not managed centrally."
     ),
     hypothesis=(
-        "The account may not use certificate lifecycle management (CLM/PKI) tooling for this estate; "
-        "this needs confirmation."
+        "The account may have certificate or TLS settings to tidy up on these endpoints."
     ),
     infra_exposure=False,
+    short_name="Certificate and TLS defects",
+    noun_one="endpoint with certificate or TLS defects",
+    noun_many="endpoints with certificate or TLS defects",
+    offering="Certificate lifecycle management",
+    pitch=(
+        "Public endpoints present expired, self-signed or weak certificates or outdated TLS. Lead with automated "
+        "certificate discovery, renewal and policy enforcement across every endpoint."
+    ),
+    opener=(
+        "{n_services} of your public endpoints present certificate or TLS defects ({details}). We automate "
+        "certificate discovery and renewal so outages and audit findings stop."
+    ),
+    discovery_questions=(
+        "How do you track certificate expiry across teams today?",
+        "Have certificate expiries caused outages in the last year?",
+        "Do any clients still require TLS 1.0 or 1.1?",
+    ),
+    confirm_on_call=(
+        "Whether the flagged endpoints are customer-facing",
+        "Current certificate tooling and ownership",
+    ),
+    detail_notes=(
+        ("Self-signed certificate", "Self-signed certificates are normal on some appliance and internal "
+         "interfaces; lead with expired or weak certificates where present."),
+    ),
 )
 
 
@@ -462,12 +617,32 @@ S16 = Signal(
         "On {observed_at} UTC, {ip}:{port}/{transport} carried a {detail} fingerprint "
         "(evidence: {sub_flags}; product '{product}')."
     ),
-    inferred_risk="Not a risk: this records the installed security or edge vendor footprint.",
+    inferred_risk=(
+        "Competitive context: these security and edge vendors already front the account's services."
+    ),
     hypothesis=(
-        "The account may be a competitive-displacement or renewal opportunity for this vendor category, "
-        "given external renewal-timing data."
+        "This vendor may also cover other services of the account."
     ),
     infra_exposure=False,
+    short_name="Security vendors in place",
+    noun_one="service fronted by a security or edge vendor",
+    noun_many="services fronted by security or edge vendors",
+    offering="Competitive positioning",
+    pitch=(
+        "Name the vendors already in place and position against or alongside them: complement where they leave "
+        "gaps, replace where your product wins head-to-head."
+    ),
+    opener=(
+        "You run {details} in front of your services. We cover the exposure it leaves behind."
+    ),
+    discovery_questions=(
+        "What does this vendor cover for you today, and what does it miss?",
+        "When does the contract come up for review?",
+    ),
+    confirm_on_call=(
+        "Contract term and renewal date",
+        "Which services the vendor covers",
+    ),
 )
 
 

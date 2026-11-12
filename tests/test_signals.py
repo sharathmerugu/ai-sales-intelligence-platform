@@ -8,6 +8,7 @@ Expected values are hand-written literals from the catalog, never recomputed.
 from __future__ import annotations
 
 import json
+import re
 import string
 from types import SimpleNamespace
 
@@ -406,6 +407,34 @@ def test_registry_wording_follows_research_findings_section_3():
         assert "may" in s.hypothesis, s.id
         for text in (s.observed_fact_template, s.inferred_risk, s.hypothesis):
             assert not any(w in text.lower() for w in forbidden), (s.id, text)
+
+
+# Wording v3 (docs/sales-brief.md §2): direct report language. Threats are stated firmly at the device-class
+# level; nothing claims the account is vulnerable, breached, buying or running something old; no hedging.
+SALES_HEDGES = re.compile(r"\b(may|might|possibly|perhaps|usually not|not observed|not a weakness|depends on|"
+                          r"not verified)\b", re.I)
+ACCOUNT_CLAIMS = re.compile(r"\b(is|are) vulnerable\b|\bbreached\b|\bcompromised\b|\blegacy\b|\bintends? to\b|"
+                            r"\brenewal opportunity\b|\bthey lack\b|\bmissing\b", re.I)
+
+
+def test_sales_wording_is_direct_complete_and_claims_nothing_about_the_account():
+    for s in SIGNALS:
+        assert all((s.short_name, s.noun_one, s.noun_many, s.offering, s.pitch, s.opener, s.discovery_questions,
+                    s.confirm_on_call)), s.id
+        texts = [s.short_name, s.inferred_risk, s.offering, s.pitch, s.opener, *s.discovery_questions,
+                 *s.confirm_on_call, *(note for _, note in s.detail_notes)]
+        for text in texts:
+            assert not SALES_HEDGES.search(text), (s.id, text)
+            assert not ACCOUNT_CLAIMS.search(text), (s.id, text)
+            assert not re.search(r"\bS\d\d\b", text), (s.id, text)   # no internal signal codes
+        assert all(q.endswith("?") for q in s.discovery_questions), s.id
+
+
+def test_sql_server_browser_keeps_its_narrow_scope():
+    s04 = next(s for s in SIGNALS if s.id == "S04")
+    note = dict(s04.detail_notes)["SQL Server Browser"]
+    assert "UDP 1434" in note and "lists SQL Server instance names and ports" in note
+    assert "data-store response" not in s04.observed_fact_template
 
 
 def test_fact_template_renders_from_an_evidence_row(tmp_path):
