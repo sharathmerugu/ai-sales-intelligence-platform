@@ -57,8 +57,11 @@ def _data(extra_evidence: list[dict] | None = None):
     return accounts, signals, evidence + (extra_evidence or [])
 
 
-def _build(tmp: Path, extra_evidence: list[dict] | None = None, name: str = f"{SNAP}.duckdb") -> Path:
+def _build(tmp: Path, extra_evidence: list[dict] | None = None, name: str = f"{SNAP}.duckdb",
+           evidence_override: dict[int, dict] | None = None) -> Path:
     accounts, signals, evidence = _data(extra_evidence)
+    for i, over in (evidence_override or {}).items():
+        evidence[i].update(over)
     d = tmp / ("acc-" + name)
     d.mkdir()
     pq.write_table(pa.Table.from_pylist(accounts, schema=ACCOUNTS_SCHEMA), d / "accounts.parquet")
@@ -185,6 +188,10 @@ def test_context_digest_tracks_evidence(tmp_path, semantic):
     (tmp_path / "b").mkdir()
     changed = SemanticLayer(Store(_build(tmp_path / "b", [_evidence(EXAMPLE, "S01", 9, port=8443)])))
     assert changed.context_digest(EXAMPLE) != semantic.context_digest(EXAMPLE)
+    # A served field of an existing row (product) changes the digest too.
+    (tmp_path / "c").mkdir()
+    renamed = SemanticLayer(Store(_build(tmp_path / "c", evidence_override={1: {"product": "Other RDP"}})))
+    assert renamed.context_digest(EXAMPLE) != semantic.context_digest(EXAMPLE)
     assert changed.context_digest(ACME) == semantic.context_digest(ACME)
 
 
@@ -256,6 +263,39 @@ def test_valid_brief_passes(semantic):
 def test_unsupported_conclusions_are_rejected(semantic, text, code):
     issues = check_brief(good_brief(card={"finding": text}), check_ctx(semantic))
     assert code in codes(issues)
+
+
+@pytest.mark.parametrize("field,text", [
+    ("finding", "The gateway may be compromised."),
+    ("finding", "These logins might be vulnerable."),
+    ("finding", "MFA is not enabled on these logins."),
+    ("finding", "The gateway is compromised?"),              # a question mark in a statement field
+    ("finding", "RDP on 2 services, affected by CVE-2024-3400."),
+    ("finding", "RDP on 2 services; see https://evil.example.net/x."),
+    ("finding", "RDP on 2 services at vpn.evil-example.net."),
+])
+def test_review_found_claim_gaps_are_closed(semantic, field, text):
+    assert "unsupported_claim" in codes(check_brief(good_brief(card={field: text}), check_ctx(semantic)))
+
+
+def test_outreach_verbs_and_ownership_assertions_on_unresolved_accounts(semantic):
+    c = check_ctx(semantic, SHARED)
+    card = {"signal_id": "S01", "headline": "One FortiGate gateway", "evidence_refs": ["obs5"],
+            "finding": "The scan saw a FortiGate login portal on 1 service.",
+            "relevance": "Internet-facing gateways are the opening for remote-access security.",
+            "action": "Contact the CISO about this gateway."}
+    brief = good_brief(decision="Verify the service owner before outreach.", card=card)
+    assert "status_mismatch" in codes(check_brief(brief, c))
+    card.update(action="Verify who operates this gateway with the company's IT team.",
+                finding="The scan saw a FortiGate portal on 1 service, which belongs to Shared Host Pty.")
+    assert "status_mismatch" in codes(check_brief(good_brief(decision="Verify the service owner before outreach.",
+                                                             card=card), c))
+
+
+def test_malformed_submission_is_returned_for_repair(semantic):
+    bad = submit(good_brief(card={"signal_id": ["S01"], "evidence_refs": None}))
+    res = InvestigationAgent(semantic, scripted(bad, submit(good_brief())), cfg()).run(ctx())
+    assert res.status == "succeeded" and res.metrics["repairs"] == 1
 
 
 def test_questions_may_ask_what_statements_may_not_claim(semantic):
@@ -447,10 +487,11 @@ def test_refusal_and_missing_submission_fall_back(semantic):
     assert res.disposition == "no_submission" and len(chatty.requests) == 2
 
 
-def test_snapshot_mismatch_fails_without_model_calls(semantic):
+def test_snapshot_mismatch_serves_fallback_without_model_calls(semantic):
     client = scripted(submit(good_brief()))
     res = InvestigationAgent(semantic, client, cfg()).run(ctx(snapshot="2026-12-01"))
-    assert (res.status, res.disposition, client.requests) == ("failed", "snapshot_mismatch", [])
+    assert (res.status, res.disposition, client.requests) == ("fallback", "snapshot_mismatch", [])
+    assert res.output["snapshot_id"] == SNAP and res.output["checks"]["passed"]
 
 
 def test_sparse_account_gets_a_coherent_brief(semantic):
@@ -536,6 +577,29 @@ def test_failures_cool_down_instead_of_retrying(semantic):
     second = svc.request(kind="brief", account_id=EXAMPLE, use_case="remote_access", scope="s")
     assert (second["state"], second["cache"], second["run_id"]) == ("fallback", "cooldown", first["run_id"])
     assert second["output"]["kind"] == "fallback" and len(down.requests) == 1
+
+
+def test_daily_spend_cap_stops_new_runs(semantic):
+    svc = BriefService(semantic, cfg(daily_usd_cap=0.0), RunStore(), client=HeuristicModel())
+    r = svc.request(kind="brief", account_id=EXAMPLE, use_case="remote_access", scope="s")
+    assert r["cache"] == "daily_budget" and svc.runs.all_runs() == []
+
+
+def test_unpriced_or_internal_provider_setups_refuse_to_start(semantic):
+    with pytest.raises(RuntimeError, match="no price"):
+        BriefService(semantic, AgentConfig(provider="anthropic", model="some-new-model"), RunStore(),
+                     client=HeuristicModel())
+    with pytest.raises(RuntimeError, match="internal"):
+        BriefService(semantic, AgentConfig(provider="anthropic"), RunStore(), client=HeuristicModel())
+
+
+def test_cli_store_does_not_recover_the_servers_runs(semantic, tmp_path):
+    path = tmp_path / "shared.sqlite"
+    server = RunStore(path)
+    rid, _ = server.create_run(cache_key="k", kind="brief", account_id=EXAMPLE, snapshot_id=SNAP, use_case=None,
+                               scope="s", context_digest="d", versions={})
+    BriefService(semantic, cfg(), RunStore(path), client=HeuristicModel(), owner=False)
+    assert server.get_run(rid)["status"] == "queued"
 
 
 def test_rate_limit_per_scope(semantic):
@@ -624,6 +688,7 @@ def test_api_runs_are_private_to_the_caller(db):
         r = c.post("/briefs", json={"account_id": EXAMPLE}, headers=_auth("alice")).json()
         _poll(c, r["run_id"], _auth("alice"))
         assert c.get(f"/runs/{r['run_id']}", headers=_auth("mallory", "x")).status_code == 401
+        assert c.get("/agent/runs", headers=_auth("alice")).json()["items"][0]["run_id"] == r["run_id"]
         app.state.briefs.get_run(r["run_id"], "internal:alice")
         assert app.state.briefs.get_run(r["run_id"], "internal:bob") is None
 
@@ -637,6 +702,7 @@ def test_api_without_provider_keeps_lists_and_evidence_working(db):
         assert c.get("/semantic/signals", params={"account_id": EXAMPLE}).json()["total"] == 2
         assert c.get("/semantic/playbooks/remote_access").json()["offering"] == "remote-access security"
         assert c.get("/semantic/account", params={"account_id": "org:nobody"}).status_code == 404
+        assert c.get("/agent/runs").status_code == 403  # no auth: runs are not listed
 
 
 def test_page_wires_the_brief_drawer_and_follow_ups(db):

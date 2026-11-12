@@ -481,12 +481,17 @@ class Store:
         return self._query("SELECT * FROM meta")[0]
 
     def signal_coverage(self, account_id: str) -> dict[str, dict[str, Any]]:
-        """Per signal of one account: evidence rows, counted / suppressed rows, observation dates and a
-        content digest of the observation ids (cache invalidation)."""
+        """Per signal of one account: evidence rows, counted / suppressed rows, observation dates and an md5
+        digest of every served evidence field (cache invalidation; md5 is stable across processes and versions)."""
         rows = self._query(
             """SELECT signal_id, count(*) AS n_rows, count_if(counted) AS n_counted,
                       count_if(NOT counted) AS n_suppressed, min(observed_at) AS first_observed,
-                      max(observed_at) AS last_observed, bit_xor(hash(observation_id)) AS ids_digest
+                      max(observed_at) AS last_observed,
+                      md5(string_agg(concat_ws('|', observation_id, ip, port, transport, sni, product, version,
+                                               http_title, detail, array_to_string(sub_flags, ','), match_basis, tier,
+                                               attribution_confidence, array_to_string(attribution_reasons, ','),
+                                               array_to_string(attribution_domains, ','), counted, suppressed_by,
+                                               observed_at), chr(10) ORDER BY observation_id)) AS rows_digest
                FROM account_evidence WHERE account_id = ? GROUP BY signal_id ORDER BY signal_id""",
             [account_id])
         return {r["signal_id"]: r for r in rows}

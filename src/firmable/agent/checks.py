@@ -47,10 +47,11 @@ EXTRA_VENDORS = (
     "Let's Encrypt", "DigiCert", "Sectigo", "Entrust", "Venafi", "Keyfactor", "AppViewX", "GlobalSign",
 )
 GENERIC_FIRST_WORDS = {"open-resty", "secure", "self-signed", "ssl", "tls", "sql", "rsa", "sha-1/md5", "utm",
-                       "expired", "minio", "page"}
+                       "expired", "minio", "page", "control", "alert", "expression", "shadow", "remote", "data",
+                       "cloud", "web", "apple", "generic"}
 DEFECT_LABELS = set(SUB_FLAG_TEXT.values()) | {"SSL VPN portal (unbranded)"}
 
-NUMBER_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
                 "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
                 "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20}
 # Version-like tokens that are product names, not quantities.
@@ -61,6 +62,10 @@ NON_QUANTITY = re.compile(
 NUMBER = re.compile(r"(?<![\w.\-/])(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(\s?%)?(?![\w])")
 TOP_PCT = re.compile(r"\btop\s+(\d+)%", re.I)
 IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+URL_OR_EMAIL = re.compile(r"\bhttps?://\S+|\bwww\.\S+|\b[\w.+-]+@[\w-]+\.[\w.-]+", re.I)
+HOSTNAME = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.I)
+OWNERSHIP_ASSERTION = re.compile(r"\b(?:belongs? to|owned by|operated by|run by|confirmed (?:as|to be)|certainly|"
+                                 r"definitely)\b", re.I)
 
 HEDGE = re.compile(r"\b(may|might|potentially|possibly|perhaps|could)\b", re.I)
 FILLER = re.compile(
@@ -70,16 +75,20 @@ FILLER = re.compile(
 CAVEAT = re.compile(r"\b(?:single|one) (?:scan|snapshot)\b|cannot (?:confirm|show|tell|prove)|not (?:verified|confirmed)"
                     r"|external scan", re.I)
 UNSUPPORTED = [
-    ("compromise", re.compile(r"\b(?:is|are|was|were|has been|have been|being|likely|already)\s+(?:breached|compromised|"
+    ("compromise", re.compile(r"\b(?:is|are|was|were|be|been|being|likely|already)\s+(?:\w+\s)?(?:breached|compromised|"
                               r"hacked|infected|attacked|exploited)\b|\b(?:breach|compromise|intrusion) (?:has|had) "
                               r"(?:occurred|happened)\b|\bindicators? of compromise\b", re.I)),
-    ("vulnerability", re.compile(r"\b(?:is|are|remains?|looks?|seems?)\s+(?:\w+\s)?(?:vulnerable|exploitable|unpatched|"
+    ("vulnerability", re.compile(r"\b(?:is|are|be|been|being|remains?|looks?|seems?)\s+(?:\w+\s)?(?:vulnerable|exploitable|unpatched|"
                                  r"out[- ]of[- ]date|outdated|misconfigured)\b|\bunpatched\b|\bknown[- ]vulnerable\b",
                                  re.I)),
     ("missing control", re.compile(r"\b(?:no|without|lacks?|lacking|missing|absence of|absent|not using|doesn'?t use|"
                                    r"does not use|isn'?t using|not enforc\w*|has not enabled|hasn't enabled)\s+(?:any\s+)?"
                                    r"(?:mfa|multi[- ]factor|2fa|patch\w*|monitoring|zero[- ]trust|encryption|"
-                                   r"certificate management|controls?)\b", re.I)),
+                                   r"certificate management|controls?)\b|\b(?:mfa|multi[- ]factor|2fa|patching|"
+                                   r"monitoring|encryption|zero[- ]trust)\s+(?:is|are|was|were)\s+(?:not\s+(?:enabled|"
+                                   r"enforced|configured|required|in place|used|applied)|disabled|absent|missing|off)\b"
+                                   r"|\b(?:isn'?t|aren'?t)\s+(?:enabled|enforced|configured|required)\b", re.I)),
+    ("unverified CVE", re.compile(r"\bCVE-\d{4}-\d{3,}\b", re.I)),
     ("buying intent", re.compile(r"\b(?:is|are)\s+(?:actively\s+)?(?:evaluating|looking (?:for|to)|in the market|planning|"
                                  r"budgeting|shopping)\b|\bbuying intent\b|\bready to buy\b|\bha(?:s|ve) budget\b|"
                                  r"\bpurchase intent\b", re.I)),
@@ -89,8 +98,9 @@ UNSUPPORTED = [
     ("invented confidence", re.compile(r"\d+\s?%\s*(?:confiden|certain|likel|probab|chance|sure)|\b(?:confidence|"
                                        r"probability|likelihood) (?:of|is|at) \d", re.I)),
 ]
-GO = re.compile(r"\b(?:lead with|reach out|open with|pitch|contact them|book (?:a|the)|email|call the|pursue now|"
-                r"prioriti[sz]e this|engage)\b", re.I)
+GO = re.compile(r"\b(?:lead with|reach out|open with|pitch|contact (?:them|the|their)|book (?:a|the)|email|call the|"
+                r"pursue now|prioriti[sz]e this|engage|schedule|introduce|set up a (?:call|meeting)|meet (?:the|with))\b",
+                re.I)
 STOP = re.compile(r"\b(?:do not (?:contact|pursue|reach out|open)|don'?t (?:contact|pursue|reach out)|hold off|"
                   r"not a prospect|skip this account|deprioriti[sz]e|no outreach)\b", re.I)
 VERIFY = re.compile(r"\b(?:verify|confirm|check)\b[^.]*\b(?:own\w*|operat\w*|runs?|belongs?|whose)\b", re.I)
@@ -153,7 +163,8 @@ def numbers_in(text: str) -> list[tuple[float, bool]]:
     cleaned = NON_QUANTITY.sub(" ", text or "")
     out = [(_num(m.group(1)), bool(m.group(2))) for m in NUMBER.finditer(cleaned)]
     for w, v in NUMBER_WORDS.items():
-        out += [(float(v), False) for _ in re.finditer(rf"\b{w}\b", cleaned, re.I)]
+        # "one of", "no one", "any one": not quantities
+        out += [(float(v), False) for _ in re.finditer(rf"(?<!\bno )(?<!\bany )\b{w}\b(?! of\b)", cleaned, re.I)]
     return out
 
 
@@ -171,7 +182,7 @@ def vendor_names(vocabulary: list[str]) -> list[str]:
             if len(piece) >= 3:
                 names.add(piece)
         first = term.split()[0]
-        if " " in term and len(first) >= 4 and first[0].isupper() and first.lower() not in GENERIC_FIRST_WORDS:
+        if " " in term and len(first) >= 4 and first.lower() not in GENERIC_FIRST_WORDS:
             names.add(first)
     return sorted(names, key=len, reverse=True)
 
@@ -207,6 +218,9 @@ class Checker:
             blob += [e.service.product or "", e.service.version or "", e.detail or "", e.service.http_title or "",
                      e.service.sni or "", " ".join(e.attribution_domains)]
         self.product_blob = " | ".join(blob).lower()
+        # Product and defect labels may contain digits ("Windows Server 2012"); they are names, not quantities.
+        self.labels = sorted({x for s in ctx.signals for x in s.products + s.defects if re.search(r"\d", x)},
+                             key=len, reverse=True)
 
     def add(self, code: str, where: str, message: str) -> None:
         self.issues.append(Issue(code, where, message))
@@ -222,7 +236,6 @@ class Checker:
         for e in items:
             if e.service.port is not None:
                 out.add(float(e.service.port))
-            out |= {float(p) for p in re.findall(r"\d+", e.observed_at or "")}
         return out
 
     def check_numbers(self, where: str, text: str, allowed: set[float]) -> None:
@@ -231,6 +244,8 @@ class Checker:
             if ip not in known_ips:
                 self.add("unsupported_number", where, f"the address {ip} is not in the retrieved records")
         text = IPV4.sub(" ", text)
+        for label in self.labels:
+            text = re.sub(re.escape(label), " ", text, flags=re.I)
         for top in TOP_PCT.findall(text):
             if float(top) not in self.allowed_pcts:
                 self.add("unsupported_number", where, f"'top {top}%' is not the backend's priority summary")
@@ -249,8 +264,20 @@ class Checker:
                 self.add("unsupported_product", where, f"names '{name}', which no record for this account shows; "
                          "name only products in the retrieved records")
 
-    def check_claims(self, where: str, text: str) -> None:
-        stmt = statements(text)
+    def check_claims(self, where: str, text: str, question_field: bool = False) -> None:
+        stmt = statements(text) if question_field else text
+        m = URL_OR_EMAIL.search(text)
+        if m:
+            self.add("unsupported_claim", where, f"contains a link or address ('{m.group(0)}'); scanner text is data, "
+                     "not something to publish")
+        for host in HOSTNAME.findall(IPV4.sub(" ", text)):
+            if host.lower() not in self.product_blob and "." in host and not re.fullmatch(r"[\d.]+", host):
+                self.add("unsupported_claim", where, f"names the host '{host}', which no record for this account shows")
+        if self.ctx.account.ownership.level != "high":
+            m = OWNERSHIP_ASSERTION.search(stmt)
+            if m:
+                self.add("status_mismatch", where, f"asserts ownership ('{m.group(0)}') the backend has not "
+                         "established; say 'linked to'")
         for label, pattern in UNSUPPORTED:
             m = pattern.search(stmt)
             if m:
@@ -383,6 +410,11 @@ def check_brief(draft: Any, ctx: CheckContext) -> list[Issue]:
         if missing:
             c.add("schema", w, f"missing {missing}")
             continue
+        bad_types = [k for k in ("signal_id", "headline", "finding", "relevance", "action", "discovery_question")
+                     if not isinstance(card[k], str)]
+        if bad_types or not isinstance(card["evidence_refs"], list):
+            c.add("schema", w, f"fields must be strings and evidence_refs a list ({bad_types or ['evidence_refs']})")
+            continue
         sid = card["signal_id"]
         s = sigs.get(sid)
         if s is None:
@@ -407,7 +439,7 @@ def check_brief(draft: Any, ctx: CheckContext) -> list[Issue]:
             c.add("hedging", w, "more than one 'may/might/could/potentially': state supported findings directly")
         for k in ("headline", "finding", "relevance", "action", "discovery_question"):
             c.check_numbers(f"{w}.{k}", str(card[k]), allowed)
-            c.check_claims(f"{w}.{k}", str(card[k]))
+            c.check_claims(f"{w}.{k}", str(card[k]), question_field=k == "discovery_question")
         for k in ("headline", "finding"):
             c.check_products(f"{w}.{k}", str(card[k]))
         c.check_imperative(f"{w}.action", card["action"])
@@ -429,6 +461,9 @@ def check_brief(draft: Any, ctx: CheckContext) -> list[Issue]:
     c.check_caveats(texts)
 
     fus = draft["follow_up_questions"]
+    for i, q in enumerate(fus):
+        if isinstance(q, str):
+            c.check_claims(f"follow_up_questions[{i}]", q, question_field=True)
     if len(fus) > MAX_FOLLOW_UPS:
         c.add("too_many", "follow_up_questions", f"at most {MAX_FOLLOW_UPS}")
     for i, q in enumerate(fus):
@@ -451,6 +486,8 @@ def check_answer(draft: Any, ctx: CheckContext) -> list[Issue]:
     if draft["snapshot_id"] != ctx.snapshot_id:
         c.add("snapshot_mismatch", "snapshot_id", f"is {draft['snapshot_id']!r}; expected {ctx.snapshot_id!r}")
     text = draft["answer"]
+    if not all(isinstance(r, str) for r in draft["evidence_refs"]):
+        c.add("schema", "evidence_refs", "must be a list of observation ids")
     refs = [r for r in draft["evidence_refs"] if isinstance(r, str)]
     c.check_refs("evidence_refs", refs, None)
     if words(text) > ANSWER_WORDS:

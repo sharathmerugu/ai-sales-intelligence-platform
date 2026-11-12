@@ -430,7 +430,8 @@ function renderBrief(box, id, resp, note) {
   const ai = b.kind === "agent";
   const gen = b.generation || {};
   const meta = el("div", { class: "gen" },
-    ai ? el("span", { class: "badge ai", title: "Written by the investigator and checked in code against the cited records" }, "AI interpretation · checked")
+    ai ? el("span", { class: "badge ai", title: "Written by the investigator and checked in code against the cited records" },
+           gen.model === "mock-heuristic" ? "Test model (no LLM) · checked" : "AI interpretation · checked")
        : el("span", { class: resp.state === "pending" ? "badge pending" : "badge" }, resp.state === "pending" ? "Investigating…" : "Factual brief"),
     el("span", {}, ai ? `${gen.model || ""} · ${b.checks?.issues_repaired ? "repaired " + b.checks.issues_repaired + "× · " : ""}scan ${b.scan_date}` : (note || reasonText(b.fallback_reason || resp.cache))),
     b.offering && b.use_case ? el("span", {}, `Lens: ${b.offering}`) : null);

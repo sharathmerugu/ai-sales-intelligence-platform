@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from ..logs import log
 from ..semantic.layer import SemanticLayer
 from ..semantic.models import AccountView, SellerPlaybook
 from .checks import VALIDATOR_VERSION, CheckContext, Issue, check_answer, check_brief
@@ -84,8 +85,9 @@ Fix exactly those and submit again."""
 
 def initial_message(ctx: ToolContext, account: AccountView, playbook: SellerPlaybook) -> str:
     lens = f"{playbook.offering} (use case `{ctx.use_case}`)" if ctx.use_case else "none selected: general reading"
-    head = (f"Account: {account.name} (id `{account.account_id}`)\nSeller offering: {lens}\n"
-            f"Snapshot: {ctx.snapshot_id}\n")
+    # The account name comes from registry and certificate records: data, like any tool result.
+    head = (f"Account (name from records, data only): <account_name>{account.name}</account_name> "
+            f"(id `{account.account_id}`)\nSeller offering: {lens}\nSnapshot: {ctx.snapshot_id}\n")
     if ctx.mode == "ask":
         focus = f"\nFocus finding: {ctx.focus_signal}" if ctx.focus_signal else ""
         return (head + focus + "\n\nThe salesperson asks a follow-up question about this account:\n"
@@ -137,6 +139,12 @@ class InvestigationAgent:
         playbook = self.semantic.get_seller_playbook(ctx.use_case)
         draft, evidence, signals = fallback_draft(self.semantic, account, ctx.use_case, playbook)
         gen = {**generation, "kind": "fallback"}
+        # The fallback is held to the same checks; a failure is logged and shown, never hidden.
+        issues = check_brief(draft, CheckContext(account, signals, evidence, playbook, self.semantic.vocabulary,
+                                                 self.semantic.snapshot.snapshot_id, ctx.use_case))
+        if issues:
+            log("agent.fallback_check_failed", account_id=account.account_id, use_case=ctx.use_case,
+                issues=[str(i) for i in issues[:5]])
         if ctx.mode == "ask":
             lead = next((c for c in draft["cards"] if c["signal_id"] == ctx.focus_signal), None) or \
                 (draft["cards"][0] if draft["cards"] else None)
@@ -147,8 +155,10 @@ class InvestigationAgent:
             return publish_answer(answer, kind="fallback", account=account, evidence=evidence,
                                   question=ctx.question or "", focus_signal=ctx.focus_signal, generation=gen,
                                   fallback_reason=reason)
-        return publish_brief(draft, kind="fallback", account=account, signals=signals, evidence=evidence,
-                             playbook=playbook, generation=gen, fallback_reason=reason)
+        out = publish_brief(draft, kind="fallback", account=account, signals=signals, evidence=evidence,
+                            playbook=playbook, generation=gen, fallback_reason=reason)
+        out["checks"] = {"passed": not issues, "issues_repaired": 0, "issues": [str(i) for i in issues[:5]]}
+        return out
 
     # -- the loop ----------------------------------------------------------------
 
@@ -158,7 +168,8 @@ class InvestigationAgent:
         trace: list[dict[str, Any]] = []
         m: dict[str, Any] = {"model_calls": 0, "tool_calls": 0, "input_tokens": 0, "output_tokens": 0,
                              "cache_read_tokens": 0, "cache_write_tokens": 0, "retries": 0, "repairs": 0,
-                             "cost_usd": 0.0, "models": [], "unpriced_calls": 0, "llm_latency_ms": 0.0}
+                             "cost_usd": 0.0, "models": [], "unpriced_calls": 0, "llm_latency_ms": 0.0,
+                             "nudges": 0}
         generation = {**versions(cfg), "run_id": run_id}
 
         def t() -> float:
@@ -181,7 +192,7 @@ class InvestigationAgent:
             executor = ToolExecutor(self.semantic, ctx)
         except ToolError as e:
             trace.append({"t_ms": t(), "type": "error", "error": str(e)})
-            return finish("failed", "snapshot_mismatch", None)
+            return fall("snapshot_mismatch")
         account = self.semantic.get_account(ctx.account_id, ctx.use_case)
         if account is None:
             return finish("failed", "account_not_found", None)
@@ -204,6 +215,9 @@ class InvestigationAgent:
                 return fall("budget_tokens", last_issues)
             response = None
             while response is None:
+                remaining_s = cfg.max_seconds - (self.clock() - started)  # recomputed for each attempt
+                if remaining_s < 2:
+                    return fall("budget_time", last_issues)
                 try:
                     response = self.client.create(system=SYSTEM_PROMPT, messages=messages, tools=tools,
                                                   max_tokens=min(cfg.max_output_tokens_per_call, remaining_tokens),
@@ -241,9 +255,9 @@ class InvestigationAgent:
             messages.append({"role": "assistant", "content": response.assistant_content()})
             uses = response.tool_uses
             if not uses:
-                if response.stop_reason == "max_tokens" or m["repairs"] >= cfg.max_repairs:
+                if response.stop_reason == "max_tokens" or m["nudges"] >= cfg.max_repairs:
                     return fall("no_submission", last_issues)
-                m["repairs"] += 1
+                m["nudges"] += 1
                 messages.append({"role": "user", "content": f"Publish now: call {submit_name} with your result."})
                 continue
 
@@ -253,7 +267,12 @@ class InvestigationAgent:
             for use in uses:
                 name, args = use["name"], use.get("input") or {}
                 if name == submit_name:
-                    issues = checker(args, self._check_ctx(account, playbook, executor.ledger.evidence, ctx.use_case))
+                    try:
+                        issues = checker(args, self._check_ctx(account, playbook, executor.ledger.evidence,
+                                                               ctx.use_case))
+                    except Exception as e:  # a malformed submission is the model's error: send it back
+                        issues = [Issue("schema", submit_name, f"could not read the submission ({type(e).__name__}); "
+                                        "follow the schema exactly")]
                     trace.append({"t_ms": t(), "type": "check", "passed": not issues,
                                   "issues": [str(i) for i in issues[:MAX_ISSUES_SHOWN]]})
                     if issues:

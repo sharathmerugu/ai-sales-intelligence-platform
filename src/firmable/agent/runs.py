@@ -126,18 +126,43 @@ class RunStore:
     def finish(self, run_id: str, *, status: str, disposition: str, metrics: dict[str, Any] | None,
                trace: list[dict[str, Any]] | None, issues: list[str] | None, output: dict[str, Any] | None,
                error: str | None = None) -> None:
-        self._exec(
-            "UPDATE agent_runs SET status = ?, disposition = ?, finished_at = ?, metrics_json = ?, trace_json = ?, "
-            "issues_json = ?, output_json = ?, error = ? WHERE run_id = ?",
-            (status, disposition, time.time(), json.dumps(metrics, default=str), json.dumps(trace, default=str),
-             json.dumps(issues or []), json.dumps(output, default=str) if output is not None else None, error, run_id))
-        run = self.get_run(run_id)
-        if run and status == "succeeded" and output is not None:
-            self._exec(
-                "INSERT OR REPLACE INTO published (cache_key, run_id, kind, scope, account_id, context_digest, "
-                "created_at, output_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (run["cache_key"], run_id, run["kind"], run["scope"], run["account_id"], run["context_digest"],
-                 time.time(), json.dumps(output, default=str)))
+        now = time.time()
+        out_json = json.dumps(output, default=str) if output is not None else None
+        # Status and publication change together, so no reader sees a finished run without its brief.
+        with self._lock:
+            con = self._con
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                con.execute(
+                    "UPDATE agent_runs SET status = ?, disposition = ?, finished_at = ?, metrics_json = ?, "
+                    "trace_json = ?, issues_json = ?, output_json = ?, error = ? WHERE run_id = ?",
+                    (status, disposition, now, json.dumps(metrics, default=str), json.dumps(trace, default=str),
+                     json.dumps(issues or []), out_json, error, run_id))
+                if status == "succeeded" and output is not None:
+                    con.execute(
+                        "INSERT OR REPLACE INTO published (cache_key, run_id, kind, scope, account_id, context_digest, "
+                        "created_at, output_json) SELECT cache_key, run_id, kind, scope, account_id, context_digest, "
+                        "?, ? FROM agent_runs WHERE run_id = ?", (now, out_json, run_id))
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+
+    def fail(self, run_id: str, disposition: str) -> None:
+        """Last-resort transition out of queued / running."""
+        try:
+            self._exec("UPDATE agent_runs SET status = 'failed', disposition = ?, finished_at = ? "
+                       "WHERE run_id = ? AND status IN ('queued', 'running')", (disposition, time.time(), run_id))
+        except sqlite3.Error:
+            pass
+
+    def cost_since(self, since: float) -> float:
+        """Recorded USD of runs created since `since` (all scopes)."""
+        total = 0.0
+        for r in self._all("SELECT metrics_json FROM agent_runs WHERE created_at >= ? AND metrics_json IS NOT NULL",
+                           (since,)):
+            total += (json.loads(r["metrics_json"]) or {}).get("cost_usd") or 0.0
+        return total
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         return _loads(self._one("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)))

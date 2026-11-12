@@ -37,7 +37,7 @@ def normalize_question(q: str) -> str:
 
 class BriefService:
     def __init__(self, semantic: SemanticLayer, config: AgentConfig, runs: RunStore | None = None,
-                 client: LLMClient | None = None):
+                 client: LLMClient | None = None, owner: bool = True):
         self.semantic = semantic
         self.config = config
         self.runs = runs or RunStore(config.app_db)
@@ -45,9 +45,17 @@ class BriefService:
         self.agent = InvestigationAgent(semantic, self.client, config)
         self.pool = ThreadPoolExecutor(max_workers=max(1, config.workers), thread_name_prefix="agent")
         self.futures: dict[str, Future] = {}
-        recovered = self.runs.recover_interrupted()
-        if recovered:
-            log("agent.recovered", runs=recovered)
+        if config.provider == "anthropic" and config.model not in config.prices:
+            raise RuntimeError(f"no price for {config.model}: set FIRMABLE_LLM_PRICES so spend can be capped")
+        if (config.provider == "anthropic" and semantic.snapshot.profile != "public"
+                and not config.allow_internal_profile):
+            raise RuntimeError("the internal serving DB holds unsanitized records; use the public DB or set "
+                               "FIRMABLE_LLM_ALLOW_INTERNAL=1 to send them to the model provider")
+        # Only the process that serves the runs recovers them; a CLI sharing the file must not.
+        if owner:
+            recovered = self.runs.recover_interrupted()
+            if recovered:
+                log("agent.recovered", runs=recovered)
 
     @property
     def enabled(self) -> bool:
@@ -55,6 +63,9 @@ class BriefService:
 
     def close(self) -> None:
         self.pool.shutdown(wait=False, cancel_futures=True)
+        for run_id, fut in list(self.futures.items()):
+            if fut.cancelled():
+                self.runs.fail(run_id, "cancelled_at_shutdown")
         self.runs.close()
 
     # -- identity -----------------------------------------------------------------
@@ -112,6 +123,8 @@ class BriefService:
             return fallback("cooldown", last["run_id"], last.get("output"))
         if self.runs.runs_since(scope, time.time() - 3600) >= self.config.runs_per_hour:
             return fallback("rate_limited")
+        if self.runs.cost_since(time.time() - 86400) >= self.config.daily_usd_cap:
+            return fallback("daily_budget")
         run_id, created = self.runs.create_run(cache_key=key, kind=kind, account_id=account_id,
                                                snapshot_id=self.semantic.snapshot.snapshot_id, use_case=use_case,
                                                scope=scope, context_digest=digest, versions=versions(self.config),
@@ -138,8 +151,8 @@ class BriefService:
         return {**resp, "run": run}
 
     def _execute(self, run_id: str, ctx: ToolContext) -> None:
-        self.runs.mark_running(run_id)
         try:
+            self.runs.mark_running(run_id)
             result = self.agent.run(ctx, run_id)
             self.runs.finish(run_id, status=result.status, disposition=result.disposition, metrics=result.metrics,
                              trace=result.trace, issues=result.issues, output=result.output)
@@ -154,8 +167,11 @@ class BriefService:
                 output = self.agent.fallback(ctx, "internal_error", {**versions(self.config), "run_id": run_id})
             except Exception:
                 pass
-            self.runs.finish(run_id, status="failed", disposition="internal_error", metrics=None, trace=None,
-                             issues=None, output=output, error=f"{type(e).__name__}: {e}"[:500])
+            try:
+                self.runs.finish(run_id, status="failed", disposition="internal_error", metrics=None, trace=None,
+                                 issues=None, output=output, error=f"{type(e).__name__}: {e}"[:500])
+            except Exception:
+                self.runs.fail(run_id, "internal_error")
             log("agent.run_error", run_id=run_id, error=f"{type(e).__name__}: {e}"[:300])
         finally:
             self.futures.pop(run_id, None)

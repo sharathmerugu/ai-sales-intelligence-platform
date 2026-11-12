@@ -600,6 +600,8 @@ def create_app(
 
     @app.get("/agent/runs")
     def agent_runs(request: Request, limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+        if expected is None:  # without auth every caller shares one scope: do not list others' questions
+            raise HTTPException(status_code=403, detail="run listing needs authentication")
         return {"items": service.runs.list_runs(scope_of(request), limit)}
 
     return app

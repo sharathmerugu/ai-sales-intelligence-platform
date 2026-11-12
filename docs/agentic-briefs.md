@@ -44,9 +44,10 @@ integration.
 | `SellerPlaybook` | `semantic.playbooks` (versioned) | offering, buyers, value angle, per-signal relevance, discovery questions, claims to avoid |
 | `SnapshotRef` | `meta` | snapshot id, scan date, serving / wording / use-case versions, profile (`public`/`internal`) |
 
-`context_digest(account)` hashes the account row, its signals, lenses, per-signal evidence coverage
-(including an observation-id digest), snapshot and versions: the cache invalidation input (24 ms on the
-public DB for a 6-signal account; layer start-up 0.13 s).
+`context_digest(account)` hashes the account row, its signals, lenses, population sizes, snapshot, versions
+and an md5 of every served evidence field per signal: the cache invalidation input. Measured on the public
+DB: 56 ms for a 6-signal account, 180 ms for the largest account (35,806 evidence rows); layer start-up
+0.13 s.
 
 Endpoints (all behind the existing Basic auth): `GET /semantic/snapshot`, `/semantic/account`,
 `/semantic/signals`, `/semantic/evidence` (by signal page, or `ids=` for cited observations; ids of another
@@ -108,7 +109,9 @@ Beyond "has a citation":
 | evidence linkage | refs not retrieved this run; refs of another signal (keyed by observation **and** signal: one banner can carry two signals); cards without evidence |
 | numbers | any count, address or percentage not held by the backend for that card's signal, the account or the cited rows; "top N%" only as the backend's own summary |
 | product names | a vendor/product (data vocabulary of 141 labels + common vendors) not in this account's records |
-| unsupported conclusions | breach/compromise, vulnerable/unpatched, missing controls, buying intent, recent change, invented confidence — unless phrased as a question |
+| unsupported conclusions | breach/compromise and vulnerable/unpatched (also hedged: "may be compromised"), missing controls ("MFA is not enabled"), buying intent, recent change, invented confidence, CVE ids — exempt only inside question fields |
+| scanner text | links, e-mail addresses, and host names that are not in the account's own records |
+| ownership certainty | "belongs to / owned by / operated by" when backend ownership is not Strong |
 | decision coherence | outreach on unresolved ownership, excluded or context-only accounts; GO and STOP in one brief; an ownership check on a strong link |
 | emphasis and relevance | a non-lens lead when the account has a lens finding; a lens card that doesn't say why it matters for the offering; no "no X finding" when the lens has none |
 | communication | headline > 12 words, card core > 80 words, decision > 25, > 1 hedge per card, any hedge in the decision, filler, repeated caveats or sentences, non-imperative action, questions without "?" |
@@ -124,9 +127,14 @@ same checks: **440 / 440** real accounts (up to 40 per status, 5 statuses, 3 len
 - **Cache key:** kind, account, snapshot, evidence digest, lens + playbook version, access scope
   (`profile:basic-auth user`), normalized follow-up question and focus signal, and prompt / tool /
   validator / semantic / fallback / model / effort versions. A change to any of them misses the cache.
+- **Spend:** new runs stop (fallback served) once recorded spend in 24 h reaches `FIRMABLE_AGENT_DAILY_USD`
+  (20); the service refuses to start with an unpriced model or, with the real provider, on the internal
+  (unsanitized) serving DB unless `FIRMABLE_LLM_ALLOW_INTERNAL=1`.
 - **Jobs:** a 2-thread pool inside the API process. A partial unique index allows one active run per
   key (concurrent requests share it). Failed keys cool down for 10 min (no retry storm); new runs are
-  limited to 60 per scope per hour. Interrupted runs are marked at start-up. `GET /runs/{id}` checks the
+  limited to 60 per scope per hour. Interrupted runs are marked at start-up by the
+  serving process only (the CLI shares the file without touching the server's runs); status and publication
+  change in one transaction; every failure path leaves the run finished with a fallback. `GET /runs/{id}` checks the
   caller's scope (404 otherwise) and withholds output whose evidence digest is no longer current.
 - **Flow:** `POST /briefs` returns at once — cached agent brief (`ready`/`hit`), or the factual cards plus a
   `run_id` (`pending`), or the factual cards with the reason (`llm_disabled`, `cooldown`, `rate_limited`).
@@ -200,6 +208,22 @@ a publication protocol that SQLite and local renames do not provide.
 - The image's default run store is in memory (lost on restart); a Railway volume or Postgres is needed for
   durable runs. **Not deployed:** the live app still runs `cf8e58a`.
 - Playbooks are two approved use cases plus a general reading; other lenses use the general playbook.
+- Numbers are checked for membership in the values the backend holds for that card (signal counts, account
+  counts, ranks, ports, scan date), not bound to the quantity they describe: "5 services" passes when 5 is,
+  say, the rank. Binding numbers to fields would need structured claims.
+- A citation may be a row counted under a stronger finding on the same service (`counted = false`); the
+  card's counts still come from the backend.
+- The page requests a brief whenever an account opens; spend is bounded by the cache, the per-scope hourly
+  limit and the daily cap, not by a click.
+- `GET /runs/{id}` recomputes the digest (≤ 180 ms) on every poll; mock runs took a median 0.49 s end to end.
+
+**Independent review (2026-11-13).** A separate reviewer read the diff and reported 2 defects and 16 risks.
+Fixed: claim checks skipped "?" sentences and hedged predicates; missing-control phrasings; outreach verbs
+("contact the…") under unresolved ownership; ownership assertions; links, host names and CVE ids; malformed
+submissions crashing the checker; per-attempt time budget; runs left queued on store errors; CLI recovering
+the server's runs; run listing without auth; publish/status race; digest missing served fields and
+population; snapshot mismatch returning no brief; no spend ceiling; mock output labelled as AI. Each has a
+test. Left as stated limitations: the numbers and citation points above, and on-open generation.
 
 ## 10. Configuration
 

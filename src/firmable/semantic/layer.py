@@ -227,6 +227,7 @@ class SemanticLayer:
         payload = {
             "account": row, "signals": self.store.account_signals(aid), "lenses": self.store.account_use_cases(aid),
             "coverage": self.store.signal_coverage(aid), "snapshot": self.snapshot.model_dump(),
+            "population": self.sizes.get(row["segment"]),
             "playbook_version": PLAYBOOK_VERSION, "semantic_version": SEMANTIC_VERSION,
         }
         blob = json.dumps(payload, sort_keys=True, default=str).encode()

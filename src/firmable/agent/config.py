@@ -15,6 +15,8 @@
 | FIRMABLE_AGENT_RUNS_PER_HOUR | 60 | new runs per access scope per hour (cache hits are free) |
 | FIRMABLE_AGENT_WORKERS | 2 | concurrent runs in this process |
 | FIRMABLE_AGENT_RETRY_COOLDOWN | 600 | seconds before a failed brief may be generated again |
+| FIRMABLE_AGENT_DAILY_USD | 20 | recorded spend over 24 h after which new runs are refused (fallback served) |
+| FIRMABLE_LLM_ALLOW_INTERNAL | unset | `1` allows sending the internal (unsanitized) serving DB's records to the provider |
 | FIRMABLE_APP_DB | `:memory:` | SQLite file for runs and briefs |
 
 The provider credential (ANTHROPIC_API_KEY or an `ant auth` profile) is read by the SDK itself.
@@ -58,6 +60,8 @@ class AgentConfig:
     retry_cooldown_s: float = 600.0
     max_transient_retries: int = 1
     app_db: str = ":memory:"
+    daily_usd_cap: float = 20.0
+    allow_internal_profile: bool = False
     prices: dict[str, dict[str, float]] = field(default_factory=lambda: dict(DEFAULT_PRICES))
 
     @property
@@ -77,7 +81,7 @@ class AgentConfig:
             "enabled": self.enabled, "provider": self.provider, "model": self.model_label, "effort": self.effort,
             "budgets": {"model_calls": self.max_model_calls, "tool_calls": self.max_tool_calls,
                         "tokens": self.max_tokens_total, "seconds": self.max_seconds, "repairs": self.max_repairs},
-            "runs_per_hour": self.runs_per_hour,
+            "runs_per_hour": self.runs_per_hour, "daily_usd_cap": self.daily_usd_cap,
         }
 
     @classmethod
@@ -108,6 +112,8 @@ class AgentConfig:
             workers=num("FIRMABLE_AGENT_WORKERS", cls.workers),
             retry_cooldown_s=num("FIRMABLE_AGENT_RETRY_COOLDOWN", cls.retry_cooldown_s, float),
             app_db=env.get("FIRMABLE_APP_DB") or ":memory:",
+            daily_usd_cap=num("FIRMABLE_AGENT_DAILY_USD", cls.daily_usd_cap, float),
+            allow_internal_profile=env.get("FIRMABLE_LLM_ALLOW_INTERNAL") == "1",
             prices=prices,
         )
 

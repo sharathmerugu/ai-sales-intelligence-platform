@@ -295,7 +295,7 @@ def _agent_command(args: argparse.Namespace, pipe: Pipeline) -> int:
     config = AgentConfig.from_env(env)
     app_db = args.app_db or str(pipe.workdir / "app" / "agent-runs.sqlite")
     semantic = SemanticLayer(Store(db))
-    service = BriefService(semantic, config, RunStore(app_db))
+    service = BriefService(semantic, config, RunStore(app_db), owner=False)
     try:
         if args.cmd == "agent-brief":
             resp = service.run_now(kind="ask" if args.question else "brief", account_id=args.account_id,
