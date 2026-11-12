@@ -132,8 +132,10 @@ countries, labelled "Observed infrastructure location"; no default country).
   evidence rows into Python (now DuckDB). Kept: lens evidence quality averages every lens service,
   including tag-level ones, like the overall evidence quality. Also fixed after review: vendor
   fingerprints led certificate findings as "main finding"; TLS flags repeated the detail text.
-- **Not deployed.** Production still runs serving v3; the app refuses a mismatched serving DB, so
-  image and public DB must be deployed together (`docs/deployment.md`).
+- **Deployed** 2026-11-12: commit `cf8e58a` with the serving-v4 public DB (wording v3, SHA-256
+  `4a901c13…`). Production Playwright 21 / 21; 7 endpoints (`/accounts` default, data-security lens,
+  hygiene view, a detail report, `/use-cases`, `/locations`, `/signals`) byte-identical to a local
+  server over the same DB.
 
 ## 7. Open issues
 

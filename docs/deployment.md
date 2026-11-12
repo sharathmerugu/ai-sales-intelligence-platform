@@ -64,6 +64,12 @@ Old-account-id redirects (`docs/api.md`) deployed in commit `aa78567`, 2026-11-1
 DB (SHA-256 unchanged): e2e 22 / 22 on production; 10 endpoints and the redirect `Location`
 byte-identical to a local server; 205 of 250 old ids redirect, 45 return 404.
 
+Serving v4 (salesperson report, statuses, use-case lenses; ADR 0010, `docs/sales-brief.md`) deployed
+in commit `cf8e58a`, 2026-11-12, with public DB SHA-256 `4a901c139f31…`: e2e 21 / 21 on production; 7
+endpoints byte-identical to a local server. Rollback to serving v3: check out `aa78567` and copy
+`~/firmable-work/serving/2026-11-07.public.serving-v3.duckdb` over the public DB, then run
+`scripts/stage_deploy.sh 2026-11-07` (image and DB must match: the app refuses another serving version).
+
 Rollback to the previous deployment: check out `fd7c671` and run `scripts/stage_deploy.sh 2026-11-07` (same
 public DB). Rollback to attribution v4: tag `scoring-v3-deployed` (`5be744f`) with the backed-up
 `~/firmable-work/serving/2026-11-07.public.scoring-v3-attr-v4.duckdb` copied over the public DB.
