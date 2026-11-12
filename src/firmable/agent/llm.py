@@ -8,6 +8,7 @@ provider is implemented (Anthropic Messages API); `ScriptedClient` replays canne
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
@@ -116,6 +117,103 @@ class AnthropicClient:
                            raw_content=msg.content, request_id=getattr(msg, "_request_id", None), latency_ms=latency)
 
 
+def _to_openai_messages(system: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Internal (Anthropic-shaped) turns -> OpenAI chat messages."""
+    out: list[dict[str, Any]] = [{"role": "system", "content": system}]
+    for m in messages:
+        content = m["content"]
+        if isinstance(content, str):
+            out.append({"role": m["role"], "content": content})
+            continue
+        blocks = [b if isinstance(b, dict) else b.model_dump() for b in content]
+        if m["role"] == "assistant":
+            calls = [{"id": b["id"], "type": "function",
+                      "function": {"name": b["name"], "arguments": json.dumps(b.get("input") or {})}}
+                     for b in blocks if b.get("type") == "tool_use"]
+            text = "\n".join(b.get("text") or "" for b in blocks if b.get("type") == "text")
+            msg: dict[str, Any] = {"role": "assistant", "content": text}
+            if calls:
+                msg["tool_calls"] = calls
+            out.append(msg)
+            continue
+        texts = []
+        for b in blocks:
+            if b.get("type") == "tool_result":
+                body = b.get("content")
+                body = body if isinstance(body, str) else json.dumps(body)
+                out.append({"role": "tool", "tool_call_id": b["tool_use_id"],
+                            "content": ("ERROR: " if b.get("is_error") else "") + body})
+            elif b.get("type") == "text":
+                texts.append(b["text"])
+        if texts:
+            out.append({"role": "user", "content": "\n".join(texts)})
+    return out
+
+
+class OpenAICompatClient:
+    """Any OpenAI-compatible chat-completions endpoint with tool calling: a local Ollama server
+    (default `http://localhost:11434/v1`, free, nothing leaves the machine) or a hosted free tier.
+    Standard library HTTP; no extra dependency."""
+
+    def __init__(self, config: AgentConfig):
+        self.config = config
+        self.model = config.model
+        self.base_url = config.base_url.rstrip("/")
+        self.api_key = config.api_key
+
+    def create(self, *, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]],
+               max_tokens: int, timeout: float) -> LLMResponse:
+        import urllib.error
+        import urllib.request
+
+        body = {
+            "model": self.model, "messages": _to_openai_messages(system, messages), "stream": False,
+            "max_tokens": min(max_tokens, 4096), "temperature": 0,
+            "tools": [{"type": "function", "function": {"name": t["name"], "description": t["description"],
+                                                         "parameters": t["input_schema"]}} for t in tools],
+        }
+        headers = {"content-type": "application/json"}
+        if self.api_key:
+            headers["authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(f"{self.base_url}/chat/completions", data=json.dumps(body).encode(),
+                                     headers=headers, method="POST")
+        started = time.perf_counter()
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            detail = e.read()[:300].decode("utf-8", "replace")
+            if e.code in (408, 409, 429) or e.code >= 500:
+                raise TransientLLMError(f"HTTP {e.code}: {detail}") from e
+            raise FatalLLMError(f"HTTP {e.code}: {detail}") from e
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            raise TransientLLMError(f"{type(e).__name__}: {e}") from e
+        latency = (time.perf_counter() - started) * 1000
+        choice = (data.get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        blocks: list[dict[str, Any]] = []
+        if msg.get("content"):
+            blocks.append({"type": "text", "text": msg["content"]})
+        for i, call in enumerate(msg.get("tool_calls") or []):
+            fn = call.get("function") or {}
+            args = fn.get("arguments") or {}
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args) if args.strip() else {}
+                except json.JSONDecodeError:
+                    args = {"_unparsed_arguments": args[:500]}
+            blocks.append({"type": "tool_use", "id": call.get("id") or f"call_{i}", "name": fn.get("name"),
+                           "input": args})
+        finish = choice.get("finish_reason")
+        stop = {"tool_calls": "tool_use", "length": "max_tokens", "stop": "end_turn"}.get(finish, finish)
+        if any(b["type"] == "tool_use" for b in blocks):
+            stop = "tool_use"
+        u = data.get("usage") or {}
+        usage = Usage(input_tokens=u.get("prompt_tokens") or 0, output_tokens=u.get("completion_tokens") or 0)
+        return LLMResponse(blocks=blocks, stop_reason=stop, usage=usage, model=data.get("model") or self.model,
+                           raw_content=None, request_id=data.get("id"), latency_ms=latency)
+
+
 @dataclass
 class ScriptedClient:
     """Test double: each turn is a function of the messages so far, returning blocks (and an optional
@@ -146,6 +244,8 @@ class ScriptedClient:
 def make_client(config: AgentConfig, semantic: Any = None) -> LLMClient | None:
     if config.provider == "anthropic":
         return AnthropicClient(config)
+    if config.provider == "openai_compat":
+        return OpenAICompatClient(config)
     if config.provider == "mock":
         from .mock import HeuristicModel
         return HeuristicModel()

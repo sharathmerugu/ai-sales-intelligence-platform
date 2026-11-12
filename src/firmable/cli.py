@@ -19,6 +19,7 @@
     firmable holdout-metrics CSV [--labels BLIND_CSV]   # scoring-v3 holdout (docs/evaluation.md)
     firmable agent-brief SNAPSHOT ACCOUNT_ID [--use-case U] [--question Q] [--provider mock|anthropic]
     firmable agent-eval SNAPSHOT [--provider mock|anthropic] [--max-cost USD] [--out DIR]   # docs/agentic-briefs.md
+    firmable agent-pregenerate SNAPSHOT [--provider openai_compat] [--per-lens 10] [--answers 3]  # briefs, once
 """
 
 from __future__ import annotations
@@ -112,7 +113,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--labels", type=Path, default=None, help="labeled blind CSV; labels are joined by case_id")
 
     for name, help_ in (("agent-brief", "run the interpretation agent on one account (synchronous)"),
-                        ("agent-eval", "evaluate agent briefs against the deterministic briefs")):
+                        ("agent-eval", "evaluate agent briefs against the deterministic briefs"),
+                        ("agent-pregenerate", "generate briefs once for a cohort and store them for serving")):
         p = sub.add_parser(name, help=help_)
         p.add_argument("snapshot")
         if name == "agent-brief":
@@ -121,10 +123,16 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--question", default=None, help="ask a follow-up instead of building a brief")
             p.add_argument("--signal", default=None, help="focus finding for --question")
             p.add_argument("--trace", action="store_true")
+        elif name == "agent-pregenerate":
+            p.add_argument("--per-lens", type=int, default=10, help="top research candidates per lens")
+            p.add_argument("--verify", type=int, default=2, help="ownership-unresolved accounts per lens")
+            p.add_argument("--answers", type=int, default=3, help="accounts per lens whose follow-ups are answered")
+            p.add_argument("--dry-run", action="store_true", help="print the cohort only")
         else:
             p.add_argument("--max-cost", type=float, default=None, help="stop starting runs past this USD total")
+            p.add_argument("--scope", default=None, help="run scope (use shared:pregenerated to reuse stored runs)")
             p.add_argument("--out", type=Path, default=None, help="default <workdir>/eval/SNAPSHOT-agent-<provider>-<time>")
-        p.add_argument("--provider", choices=["mock", "anthropic", "none"], default=None,
+        p.add_argument("--provider", choices=["mock", "anthropic", "openai_compat", "none"], default=None,
                        help="default $FIRMABLE_LLM_PROVIDER or mock")
         p.add_argument("--db", type=Path, default=None, help="serving DB (default: the public DB, else the internal one)")
         p.add_argument("--app-db", default=None, help="SQLite run store (default <workdir>/app/agent-runs.sqlite)")
@@ -261,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         except (FileNotFoundError, ValueError) as e:
             raise SystemExit(f"holdout-metrics: {e}") from None
         _print(holdout_metrics(rows))
-    elif args.cmd in ("agent-brief", "agent-eval"):
+    elif args.cmd in ("agent-brief", "agent-eval", "agent-pregenerate"):
         return _agent_command(args, pipe)
     elif args.cmd == "serve":
         import uvicorn
@@ -293,7 +301,12 @@ def _agent_command(args: argparse.Namespace, pipe: Pipeline) -> int:
     env = dict(os.environ)
     env["FIRMABLE_LLM_PROVIDER"] = args.provider or env.get("FIRMABLE_LLM_PROVIDER") or "mock"
     config = AgentConfig.from_env(env)
-    app_db = args.app_db or str(pipe.workdir / "app" / "agent-runs.sqlite")
+    app_db = args.app_db or str(pipe.workdir / "app" / (f"{args.snapshot}.briefs.sqlite"
+                                                        if args.cmd == "agent-pregenerate" else "agent-runs.sqlite"))
+    if args.cmd == "agent-pregenerate":
+        # Generation is one-off and slow on a local CPU: wide per-run budgets, no hourly / daily throttles.
+        config = config.with_(max_seconds=float(env.get("FIRMABLE_AGENT_MAX_SECONDS") or 1800),
+                              runs_per_hour=10**9, retry_cooldown_s=0.0, workers=1)
     semantic = SemanticLayer(Store(db))
     service = BriefService(semantic, config, RunStore(app_db), owner=False)
     try:
@@ -309,11 +322,21 @@ def _agent_command(args: argparse.Namespace, pipe: Pipeline) -> int:
                 out["issues"] = run.get("issues")
             _print(out)
             return 0
+        if args.cmd == "agent-pregenerate":
+            from .agent.pregenerate import cohort, pregenerate
+
+            items = cohort(service, args.per_lens, args.verify)
+            if args.dry_run:
+                _print({"app_db": app_db, "items": items})
+                return 0
+            summary = pregenerate(service, items, args.answers, Path(app_db).with_suffix(".progress.jsonl"))
+            _print({"app_db": app_db, **summary})
+            return 0
         from .evaluation.agent_eval import run_eval
 
         stamp = _time.strftime("%Y%m%dT%H%M%S")
         out_dir = args.out or pipe.workdir / "eval" / f"{args.snapshot}-agent-{config.provider}-{stamp}"
-        summary = run_eval(semantic, service, Path(out_dir), max_cost_usd=args.max_cost)
+        summary = run_eval(semantic, service, Path(out_dir), max_cost_usd=args.max_cost, scope=args.scope)
         _print({"out": str(out_dir), **summary})
         return 0
     except KeyError as e:

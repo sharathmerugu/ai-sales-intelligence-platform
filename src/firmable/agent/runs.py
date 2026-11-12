@@ -20,6 +20,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_runs (
     run_id TEXT PRIMARY KEY,
     cache_key TEXT NOT NULL,
+    content_key TEXT,
     kind TEXT NOT NULL,
     account_id TEXT NOT NULL,
     snapshot_id TEXT,
@@ -45,6 +46,7 @@ CREATE INDEX IF NOT EXISTS runs_by_key ON agent_runs (cache_key, created_at);
 CREATE INDEX IF NOT EXISTS runs_by_scope ON agent_runs (scope, created_at);
 CREATE TABLE IF NOT EXISTS published (
     cache_key TEXT PRIMARY KEY,
+    content_key TEXT,
     run_id TEXT NOT NULL,
     kind TEXT NOT NULL,
     scope TEXT NOT NULL,
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS published (
     created_at REAL NOT NULL,
     output_json TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS published_by_content ON published (content_key);
 """
 ACTIVE = ("queued", "running")
 JSON_COLUMNS = ("versions_json", "metrics_json", "trace_json", "issues_json", "output_json")
@@ -69,12 +72,17 @@ def _loads(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 
 class RunStore:
-    def __init__(self, path: str | Path = ":memory:"):
+    def __init__(self, path: str | Path = ":memory:", read_only: bool = False):
+        self._lock = threading.Lock()
+        if read_only:  # a shipped, never-modified file (pregenerated briefs)
+            self._con = sqlite3.connect(f"file:{Path(path).resolve()}?mode=ro&immutable=1", uri=True,
+                                        check_same_thread=False)
+            self._con.row_factory = sqlite3.Row
+            return
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._con = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._con.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
         with self._lock:
             if str(path) != ":memory:":
                 self._con.execute("PRAGMA journal_mode=WAL")
@@ -97,23 +105,23 @@ class RunStore:
 
     # -- runs -------------------------------------------------------------------
 
-    def create_run(self, *, cache_key: str, kind: str, account_id: str, snapshot_id: str | None,
+    def create_run(self, *, cache_key: str, kind: str, content_key: str | None = None, account_id: str, snapshot_id: str | None,
                    use_case: str | None, scope: str, context_digest: str, versions: dict[str, Any],
                    question: str | None = None, signal_id: str | None = None) -> tuple[str, bool]:
         """(run_id, created). When a run for this key is already active, returns it with created=False."""
         run_id = uuid.uuid4().hex
         try:
             self._exec(
-                "INSERT INTO agent_runs (run_id, cache_key, kind, account_id, snapshot_id, use_case, question, "
-                "signal_id, scope, context_digest, versions_json, status, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
-                (run_id, cache_key, kind, account_id, snapshot_id, use_case, question, signal_id, scope,
+                "INSERT INTO agent_runs (run_id, cache_key, content_key, kind, account_id, snapshot_id, use_case, "
+                "question, signal_id, scope, context_digest, versions_json, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)",
+                (run_id, cache_key, content_key, kind, account_id, snapshot_id, use_case, question, signal_id, scope,
                  context_digest, json.dumps(versions, sort_keys=True), time.time()))
             return run_id, True
         except sqlite3.IntegrityError:
             active = self.active_run(cache_key)
             if active is None:  # finished between the insert and the lookup: try once more
-                return self.create_run(cache_key=cache_key, kind=kind, account_id=account_id,
+                return self.create_run(cache_key=cache_key, kind=kind, content_key=content_key, account_id=account_id,
                                        snapshot_id=snapshot_id, use_case=use_case, scope=scope,
                                        context_digest=context_digest, versions=versions, question=question,
                                        signal_id=signal_id)
@@ -140,8 +148,9 @@ class RunStore:
                      json.dumps(issues or []), out_json, error, run_id))
                 if status == "succeeded" and output is not None:
                     con.execute(
-                        "INSERT OR REPLACE INTO published (cache_key, run_id, kind, scope, account_id, context_digest, "
-                        "created_at, output_json) SELECT cache_key, run_id, kind, scope, account_id, context_digest, "
+                        "INSERT OR REPLACE INTO published (cache_key, content_key, run_id, kind, scope, account_id, "
+                        "context_digest, created_at, output_json) SELECT cache_key, content_key, run_id, kind, scope, "
+                        "account_id, context_digest, "
                         "?, ? FROM agent_runs WHERE run_id = ?", (now, out_json, run_id))
                 con.execute("COMMIT")
             except BaseException:
@@ -178,6 +187,10 @@ class RunStore:
     def published(self, cache_key: str) -> dict[str, Any] | None:
         row = self._one("SELECT * FROM published WHERE cache_key = ?", (cache_key,))
         return _loads(row)
+
+    def published_by_content(self, content_key: str) -> dict[str, Any] | None:
+        return _loads(self._one("SELECT * FROM published WHERE content_key = ? ORDER BY created_at DESC LIMIT 1",
+                                (content_key,)))
 
     def runs_since(self, scope: str, since: float) -> int:
         return self._one("SELECT count(*) AS n FROM agent_runs WHERE scope = ? AND created_at >= ?",

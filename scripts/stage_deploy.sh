@@ -13,6 +13,12 @@ ctx="$work/deploy-context"
 rm -rf "$ctx" && mkdir -p "$ctx"
 git archive HEAD | tar -x -C "$ctx"
 cp "$db" "$ctx/deploy/serving.duckdb"
+# Briefs generated once from the public DB (`firmable agent-pregenerate`); optional, served read-only.
+briefs="$work/app/$snap.briefs.sqlite"
+if [[ -f "$briefs" ]]; then
+  sqlite3 "$briefs" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>&1 || true
+  cp "$briefs" "$ctx/deploy/briefs.sqlite"
+fi
 git rev-parse HEAD > "$ctx/deploy/GIT_COMMIT"
 ( cd "$ctx" && find . -type f | sort | grep -v '^./src/' | head -50 && du -sh . )
 if [[ "${2:-}" != "--no-up" ]]; then

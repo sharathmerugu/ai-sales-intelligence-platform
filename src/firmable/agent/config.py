@@ -2,7 +2,10 @@
 
 | Variable | Default | Meaning |
 |---|---|---|
-| FIRMABLE_LLM_PROVIDER | `none` | `anthropic`, `mock` (deterministic test model, no network) or `none` (factual briefs only) |
+| FIRMABLE_LLM_PROVIDER | `none` | `anthropic`, `openai_compat` (Ollama or any OpenAI-compatible endpoint), `mock` (deterministic test model, no network) or `none` (factual briefs only) |
+| FIRMABLE_LLM_BASE_URL | `http://localhost:11434/v1` | `openai_compat` endpoint (local Ollama by default) |
+| FIRMABLE_LLM_API_KEY | unset | bearer key for a hosted `openai_compat` endpoint |
+| FIRMABLE_PREGENERATED_DB | unset | read-only SQLite of briefs generated once (`firmable agent-pregenerate`), served first |
 | FIRMABLE_LLM_MODEL | `claude-opus-5-5` | model id |
 | FIRMABLE_LLM_EFFORT | `medium` | `output_config.effort` |
 | FIRMABLE_LLM_FALLBACKS | `default` | server-side refusal fallback (`default` or `off`) |
@@ -40,7 +43,8 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
     "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
 }
 PRICES_SOURCE = "Anthropic list prices recorded 2026-11-03 (override: FIRMABLE_LLM_PRICES)"
-PROVIDERS = ("none", "anthropic", "mock")
+PROVIDERS = ("none", "anthropic", "openai_compat", "mock")
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]")
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,26 @@ class AgentConfig:
     app_db: str = ":memory:"
     daily_usd_cap: float = 20.0
     allow_internal_profile: bool = False
+    base_url: str = "http://localhost:11434/v1"
+    api_key: str | None = field(default=None, repr=False)
+    pregenerated_db: str | None = None
+
+    @property
+    def local(self) -> bool:
+        """A model on this machine: no data leaves it and no API is billed."""
+        if self.provider == "mock":
+            return True
+        if self.provider != "openai_compat":
+            return False
+        from urllib.parse import urlparse
+        return (urlparse(self.base_url).hostname or "") in ("localhost", "127.0.0.1", "::1")
+
+    def price_for(self, model: str) -> dict[str, float] | None:
+        if model in self.prices:
+            return self.prices[model]
+        if self.local:  # local inference: no API charge (hardware and power are not counted)
+            return {"input": 0.0, "output": 0.0, "cache_read": 0.0, "cache_write": 0.0}
+        return None
     prices: dict[str, dict[str, float]] = field(default_factory=lambda: dict(DEFAULT_PRICES))
 
     @property
@@ -79,6 +103,7 @@ class AgentConfig:
         """What the UI may see: no credentials, no prices beyond their source."""
         return {
             "enabled": self.enabled, "provider": self.provider, "model": self.model_label, "effort": self.effort,
+            "pregenerated": bool(self.pregenerated_db),
             "budgets": {"model_calls": self.max_model_calls, "tool_calls": self.max_tool_calls,
                         "tokens": self.max_tokens_total, "seconds": self.max_seconds, "repairs": self.max_repairs},
             "runs_per_hour": self.runs_per_hour, "daily_usd_cap": self.daily_usd_cap,
@@ -114,6 +139,9 @@ class AgentConfig:
             app_db=env.get("FIRMABLE_APP_DB") or ":memory:",
             daily_usd_cap=num("FIRMABLE_AGENT_DAILY_USD", cls.daily_usd_cap, float),
             allow_internal_profile=env.get("FIRMABLE_LLM_ALLOW_INTERNAL") == "1",
+            base_url=env.get("FIRMABLE_LLM_BASE_URL") or cls.base_url,
+            api_key=env.get("FIRMABLE_LLM_API_KEY") or None,
+            pregenerated_db=env.get("FIRMABLE_PREGENERATED_DB") or None,
             prices=prices,
         )
 

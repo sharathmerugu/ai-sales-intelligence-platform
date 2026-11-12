@@ -710,3 +710,94 @@ def test_page_wires_the_brief_drawer_and_follow_ups(db):
         html = c.get("/").text
     for hook in ('id="drawer"', "postJSON(\"/briefs\"", "postJSON(\"/ask\"", "/semantic/evidence?", "pollRun("):
         assert hook in html
+
+
+# --- OpenAI-compatible provider (Ollama / hosted free tiers) and stored briefs -------------
+
+class _FakeOpenAI:
+    """A local stand-in for an OpenAI-compatible endpoint: replays tool calls like a small model would."""
+
+    def __init__(self, turns):
+        import http.server
+        import json as _json
+
+        self.requests = []
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                body = _json.loads(self.rfile.read(int(self.headers["content-length"])))
+                outer.requests.append(body)
+                msg = turns[min(len(outer.requests) - 1, len(turns) - 1)](body)
+                data = _json.dumps({"id": "x", "model": "qwen2.5:7b", "choices": [
+                    {"message": msg, "finish_reason": "tool_calls" if msg.get("tool_calls") else "stop"}],
+                    "usage": {"prompt_tokens": 1200, "completion_tokens": 80}}).encode()
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+
+
+def _call(name, args, i):
+    import json as _json
+    return {"id": f"c{i}", "type": "function", "function": {"name": name, "arguments": _json.dumps(args)}}
+
+
+def test_openai_compatible_client_runs_the_agent_loop(semantic):
+    from firmable.agent.llm import OpenAICompatClient
+    fake = _FakeOpenAI([
+        lambda b: {"content": "", "tool_calls": [_call("get_account", {}, 1), _call("list_signals", {}, 2)]},
+        lambda b: {"content": "", "tool_calls": [_call("get_signal_evidence", {"signal_id": "S01"}, 3)]},
+        lambda b: {"content": "", "tool_calls": [_call("submit_brief", good_brief(), 4)]},
+    ])
+    config = AgentConfig(provider="openai_compat", model="qwen2.5:7b", base_url=fake.url)
+    assert config.local and config.price_for("qwen2.5:7b")["input"] == 0.0
+    res = InvestigationAgent(semantic, OpenAICompatClient(config), config).run(ctx())
+    fake.server.shutdown()
+    assert (res.status, res.metrics["model_calls"], res.metrics["cost_usd"]) == ("succeeded", 3, 0.0)
+    assert res.metrics["input_tokens"] == 3600 and res.output["generation"]["models_used"] == ["qwen2.5:7b"]
+    second = fake.requests[1]["messages"]
+    assert second[0]["role"] == "system" and second[2]["tool_calls"][0]["function"]["name"] == "get_account"
+    assert {m["role"] for m in second[3:]} == {"tool"}  # tool results go back as tool messages
+    assert fake.requests[0]["tools"][0]["function"]["name"] == "get_account"
+
+
+def test_hosted_endpoint_needs_a_price_and_the_public_db(semantic):
+    hosted = AgentConfig(provider="openai_compat", model="free-model", base_url="https://example.invalid/v1")
+    assert not hosted.local
+    with pytest.raises(RuntimeError, match="no price"):
+        BriefService(semantic, hosted, RunStore(), client=HeuristicModel())
+
+
+def test_stored_briefs_are_served_without_a_model(db, semantic, tmp_path):
+    from firmable.agent.pregenerate import SHARED_SCOPE, pregenerate
+    path = tmp_path / "briefs.sqlite"
+    gen = BriefService(semantic, cfg(), RunStore(path), client=HeuristicModel())
+    summary = pregenerate(gen, [{"account_id": EXAMPLE, "use_case": "remote_access", "why": "top"},
+                                {"account_id": SHARED, "use_case": "remote_access", "why": "verify"}],
+                          answers_per_lens=1, progress_path=tmp_path / "progress.jsonl")
+    assert summary["tally"]["brief:published"] == 2 and summary["tally"]["ask:published"] >= 1
+    again = pregenerate(gen, [{"account_id": EXAMPLE, "use_case": "remote_access", "why": "top"}], 0,
+                        tmp_path / "progress.jsonl")
+    assert again["tally"] == {"brief:already_stored": 1}  # resumable: nothing is generated twice
+    question = gen.runs.published_by_content(gen.content_key("brief", EXAMPLE, "remote_access"))["output"][
+        "follow_up_questions"][0]
+    gen.close()
+    app = create_app(db, agent_config=AgentConfig(provider="none", pregenerated_db=str(path)))
+    with TestClient(app) as c:
+        r = c.post("/briefs", json={"account_id": EXAMPLE, "use_case": "remote_access"}).json()
+        assert (r["state"], r["cache"], r["output"]["kind"]) == ("ready", "pregenerated", "agent")
+        a = c.post("/ask", json={"account_id": EXAMPLE, "use_case": "remote_access", "question": question}).json()
+        assert (a["state"], a["cache"]) == ("ready", "pregenerated")
+        other_lens = c.post("/briefs", json={"account_id": EXAMPLE, "use_case": "certificate_management"}).json()
+        assert other_lens["state"] == "fallback"  # not generated: the deterministic brief
+        assert c.get("/agent/config").json()["pregenerated"] is True
+    assert SHARED_SCOPE.startswith("shared")

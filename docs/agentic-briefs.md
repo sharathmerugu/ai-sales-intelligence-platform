@@ -140,6 +140,39 @@ same checks: **440 / 440** real accounts (up to 40 per status, 5 statuses, 3 len
   `run_id` (`pending`), or the factual cards with the reason (`llm_disabled`, `cooldown`, `rate_limited`).
   The page polls `/runs/{id}` and swaps in the checked brief. `POST /ask` is the same for follow-ups.
 
+## 6a. Stored briefs: generate once, serve from a file (implemented; not yet generated)
+
+The dataset is one fixed snapshot, so briefs need generating only once. `firmable agent-pregenerate SNAPSHOT`
+runs the agent over a cohort and stores the checked output in `<workdir>/app/SNAPSHOT.briefs.sqlite`;
+the app opens that file read-only (`FIRMABLE_PREGENERATED_DB`) and serves a match before anything else,
+with no model configured at serve time (`cache: "pregenerated"`). Matching uses a content key (account,
+snapshot, evidence digest, lens and playbook, question, check and semantic versions), so a stored brief is
+served only while the evidence and checks it passed are unchanged. Accounts outside the cohort get the
+deterministic cards. The run is resumable; anything already stored is skipped.
+
+- Cohort (31 account-lens pairs for 2026-11-07 with defaults): the 15 evaluation cases, the top 10
+  research candidates and top 2 ownership-unresolved accounts per lens; follow-up answers for the brief's
+  suggested questions on the first 3 accounts per lens.
+- Free model: any OpenAI-compatible endpoint (`FIRMABLE_LLM_PROVIDER=openai_compat`). Default is a local
+  Ollama server (`http://localhost:11434/v1`): free, no account, no data leaves the machine, $0 API cost
+  recorded (hardware and power not counted). A hosted free tier works with `FIRMABLE_LLM_BASE_URL`,
+  `FIRMABLE_LLM_API_KEY` and a zero price in `FIRMABLE_LLM_PRICES`; it then requires the public DB.
+- Generate from the **public** DB (the CLI default): the digest includes the DB profile, so briefs made
+  from the internal DB do not match the deployed app.
+- `scripts/stage_deploy.sh` copies the file to `deploy/briefs.sqlite`; the image sets
+  `FIRMABLE_PREGENERATED_DB` to it. Not deployed.
+
+```bash
+OLLAMA_CONTEXT_LENGTH=16384 ollama serve &          # prompts reach ~8k tokens; small defaults truncate
+ollama pull qwen2.5:7b
+FIRMABLE_LLM_PROVIDER=openai_compat FIRMABLE_LLM_MODEL=qwen2.5:7b uv run firmable agent-pregenerate 2026-11-07
+uv run firmable agent-eval 2026-11-07 --provider openai_compat --app-db ~/firmable-work/app/2026-11-07.briefs.sqlite --scope shared:pregenerated
+FIRMABLE_PREGENERATED_DB=~/firmable-work/app/2026-11-07.briefs.sqlite uv run python -m firmable.api --db ~/firmable-work/serving/2026-11-07.public.duckdb
+```
+
+The evaluation command reuses the stored runs (same scope), so its tokens, latency and repairs are those of
+the one-time generation.
+
 ## 7. Evaluation
 
 ```bash
@@ -194,6 +227,9 @@ a publication protocol that SQLite and local renames do not provide.
 
 ## 9. Limitations and outstanding checks
 
+- **Stored briefs not generated yet:** installing a local model was not possible from this session (Homebrew
+  has no Intel-Mac bottle for Ollama and started a source build, which was stopped; running a downloaded
+  binary was refused by the session's permission policy). The command in §6a runs once a model is available.
 - **No real-model run yet:** no Anthropic credential was available in this environment. Outstanding:
   (1) one `agent-brief --provider anthropic --trace` call to confirm the SDK request shape, refusal
   fallback beta and tool loop; (2) `agent-eval --provider anthropic --max-cost N` for real tokens,

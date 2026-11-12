@@ -18,6 +18,7 @@ import json
 import re
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 from ..logs import log
@@ -43,12 +44,17 @@ class BriefService:
         self.runs = runs or RunStore(config.app_db)
         self.client = client if client is not None else (make_client(config) if config.enabled else None)
         self.agent = InvestigationAgent(semantic, self.client, config)
+        # Briefs generated once (`firmable agent-pregenerate`) and shipped read-only: served before anything else.
+        self.pregen: RunStore | None = None
+        if config.pregenerated_db and Path(config.pregenerated_db).exists():
+            self.pregen = RunStore(config.pregenerated_db, read_only=True)
+            log("agent.pregenerated", path=config.pregenerated_db)
         self.pool = ThreadPoolExecutor(max_workers=max(1, config.workers), thread_name_prefix="agent")
         self.futures: dict[str, Future] = {}
-        if config.provider == "anthropic" and config.model not in config.prices:
+        if config.provider in ("anthropic", "openai_compat") and config.price_for(config.model) is None:
             raise RuntimeError(f"no price for {config.model}: set FIRMABLE_LLM_PRICES so spend can be capped")
-        if (config.provider == "anthropic" and semantic.snapshot.profile != "public"
-                and not config.allow_internal_profile):
+        if (config.provider in ("anthropic", "openai_compat") and not config.local
+                and semantic.snapshot.profile != "public" and not config.allow_internal_profile):
             raise RuntimeError("the internal serving DB holds unsanitized records; use the public DB or set "
                                "FIRMABLE_LLM_ALLOW_INTERNAL=1 to send them to the model provider")
         # Only the process that serves the runs recovers them; a CLI sharing the file must not.
@@ -63,6 +69,8 @@ class BriefService:
 
     def close(self) -> None:
         self.pool.shutdown(wait=False, cancel_futures=True)
+        if self.pregen is not None:
+            self.pregen.close()
         for run_id, fut in list(self.futures.items()):
             if fut.cancelled():
                 self.runs.fail(run_id, "cancelled_at_shutdown")
@@ -81,6 +89,20 @@ class BriefService:
             "versions": versions(self.config),
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:40], digest
+
+    def content_key(self, kind: str, account_id: str, use_case: str | None, question: str | None = None,
+                    signal_id: str | None = None) -> str:
+        """What a brief is about, independent of who asks and which model wrote it: account, snapshot,
+        evidence digest, lens and playbook, question, and the check / semantic versions it passed."""
+        from ..semantic.models import SEMANTIC_VERSION
+        from .checks import VALIDATOR_VERSION
+        playbook = self.semantic.get_seller_playbook(use_case)
+        payload = {"kind": kind, "account_id": account_id, "snapshot_id": self.semantic.snapshot.snapshot_id,
+                   "evidence_digest": self.semantic.context_digest(account_id), "use_case": use_case,
+                   "playbook": [playbook.id, playbook.version], "signal_id": signal_id,
+                   "question": normalize_question(question or "").lower() or None,
+                   "validator_version": VALIDATOR_VERSION, "semantic_version": SEMANTIC_VERSION}
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:40]
 
     def _ctx(self, account_id: str, use_case: str | None, scope: str, mode: str = "brief",
              question: str | None = None, signal_id: str | None = None) -> ToolContext:
@@ -107,6 +129,13 @@ class BriefService:
             out = output or self.agent.fallback(ctx, reason, {**versions(self.config), "run_id": run_id})
             return {**base, "state": "fallback", "cache": reason, "run_id": run_id, "output": out}
 
+        ckey = self.content_key(kind, account_id, use_case, question, signal_id)
+        if self.pregen is not None and not refresh:
+            hit = self.pregen.published_by_content(ckey)
+            if hit is not None:
+                return {**base, "state": "ready", "cache": "pregenerated", "run_id": hit["run_id"],
+                        "output": hit["output"]}
+
         if not self.enabled:
             return fallback("llm_disabled")
         if not refresh:
@@ -125,7 +154,7 @@ class BriefService:
             return fallback("rate_limited")
         if self.runs.cost_since(time.time() - 86400) >= self.config.daily_usd_cap:
             return fallback("daily_budget")
-        run_id, created = self.runs.create_run(cache_key=key, kind=kind, account_id=account_id,
+        run_id, created = self.runs.create_run(cache_key=key, kind=kind, content_key=ckey, account_id=account_id,
                                                snapshot_id=self.semantic.snapshot.snapshot_id, use_case=use_case,
                                                scope=scope, context_digest=digest, versions=versions(self.config),
                                                question=question, signal_id=signal_id)

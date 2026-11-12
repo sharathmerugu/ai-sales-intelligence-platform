@@ -240,8 +240,9 @@ class InvestigationAgent:
             m["llm_latency_ms"] = round(m["llm_latency_ms"] + response.latency_ms, 1)
             if response.model not in m["models"]:
                 m["models"].append(response.model)
-            c = cost_usd(cfg.prices, response.model, u.input_tokens, u.output_tokens, u.cache_read_tokens,
-                         u.cache_write_tokens)
+            price = cfg.price_for(response.model)
+            c = None if price is None else cost_usd({response.model: price}, response.model, u.input_tokens,
+                                                    u.output_tokens, u.cache_read_tokens, u.cache_write_tokens)
             if c is None:
                 m["unpriced_calls"] += 1
             else:

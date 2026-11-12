@@ -184,7 +184,8 @@ def _median(rows: list[dict[str, Any]], key: str) -> float | None:
 
 
 def run_eval(semantic: SemanticLayer, service: BriefService, out_dir: Path, cases: list[dict[str, Any]] | None = None,
-             max_cost_usd: float | None = None) -> dict[str, Any]:
+             max_cost_usd: float | None = None, scope: str | None = None) -> dict[str, Any]:
+    scope = scope or SCOPE
     out_dir.mkdir(parents=True, exist_ok=True)
     cases = cases or select_cases(semantic.store)
     (out_dir / "cases.json").write_text(json.dumps(cases, indent=1))
@@ -198,12 +199,12 @@ def run_eval(semantic: SemanticLayer, service: BriefService, out_dir: Path, case
         v4 = semantic.deterministic_brief(case["account_id"], case["use_case"])
         account = semantic.get_account(case["account_id"], case["use_case"])
         pb = semantic.get_seller_playbook(case["use_case"])
-        resp = service.run_now(kind="brief", account_id=case["account_id"], use_case=case["use_case"], scope=SCOPE)
+        resp = service.run_now(kind="brief", account_id=case["account_id"], use_case=case["use_case"], scope=scope)
         run = resp.get("run") or {}
         metrics = run.get("metrics") or {}
         spent += metrics.get("cost_usd") or 0.0
         draft, _, _ = fallback_draft(semantic, account, case["use_case"], pb)
-        fb = service.agent.fallback(service._ctx(case["account_id"], case["use_case"], SCOPE), "eval", {})
+        fb = service.agent.fallback(service._ctx(case["account_id"], case["use_case"], scope), "eval", {})
         results.append({
             "case": case,
             "status": account.status.code,
