@@ -93,6 +93,32 @@ blockquote { margin: 4px 0 8px; padding: 6px 12px; border-left: 3px solid var(--
 details.bucket { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; }
 details.bucket > summary { color: var(--text); margin: 0; font-size: 14px; }
 details.bucket[open] > summary { margin-bottom: 6px; }
+/* Agentic brief: decision, signal cards, evidence drawer, follow-ups */
+#ai-brief { margin: 12px 0 4px; }
+.decision { font-size: 16px; font-weight: 650; margin: 0 0 4px; }
+.gen { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); white-space: nowrap; }
+.badge.ai { border-color: var(--accent); color: var(--accent); }
+.badge.pending { border-color: var(--risk); color: var(--risk); }
+.sig-card { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; background: var(--panel); }
+.sig-card.secondary { border-left-color: var(--line); }
+.sig-card h4 { margin: 0 0 6px; font-size: 15px; }
+.sig-card p { margin: 3px 0; }
+.sig-card .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-right: 6px; font-weight: 600; }
+.sig-card .q { color: var(--muted); font-style: italic; }
+.sig-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.followups { margin: 8px 0 4px; }
+.followups .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.followups button.chip { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-soft); border-radius: 14px; padding: 3px 10px; font-size: 12.5px; }
+.ask-form { display: flex; gap: 6px; margin: 0; }
+.ask-form input { flex: 1; min-width: 0; }
+.answer { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 6px 10px; margin: 6px 0; border-radius: 0 6px 6px 0; }
+.answer .who { font-size: 12px; color: var(--muted); }
+#drawer { position: fixed; top: 0; right: 0; height: 100%; width: min(520px, 100%); background: var(--panel); border-left: 1px solid var(--line);
+  box-shadow: -6px 0 24px rgba(0,0,0,.15); padding: 14px 16px; overflow-y: auto; z-index: 20; }
+#drawer[hidden] { display: none; }
+#drawer header { display: flex; justify-content: space-between; align-items: baseline; padding: 0; border: none; background: none; }
+.full-report > summary { font-size: 14px; color: var(--text); font-weight: 600; margin-top: 14px; }
 </style>
 </head>
 <body>
@@ -169,10 +195,14 @@ details.bucket[open] > summary { margin-bottom: 6px; }
     <p class="empty">Select an account to open its report.</p>
   </section>
 </main>
+<aside id="drawer" hidden aria-label="Evidence" role="dialog">
+  <header><h2 id="drawer-title">Evidence</h2><button class="secondary" type="button" id="drawer-close">Close</button></header>
+  <div id="drawer-body"></div>
+</aside>
 <script>
 "use strict";
 const PAGE = 50;
-const state = { offset: 0, total: 0, signals: {}, useCases: {}, selected: null, snapshot: null, listSeq: 0, detailSeq: 0 };
+const state = { offset: 0, total: 0, signals: {}, useCases: {}, selected: null, snapshot: null, listSeq: 0, detailSeq: 0, agent: null };
 const OWNERSHIP = { high: "Strong", medium: "Probable", low: "Unconfirmed" };
 const LIST_NOTE = {
   research: "Strong ownership link and exposed infrastructure, ranked by exposure.",
@@ -205,6 +235,27 @@ async function getJSON(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
+}
+async function postJSON(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+const shortDate = (iso) => { if (!iso) return "—"; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }); };
+const POLL_MS = 1500, POLL_LIMIT_MS = 150000;
+
+// Polls a run until it finishes; returns the run, or null when superseded (another account opened) or timed out.
+async function pollRun(runId, seq) {
+  const started = Date.now();
+  while (Date.now() - started < POLL_LIMIT_MS) {
+    await sleep(POLL_MS);
+    if (seq !== state.detailSeq) return null;
+    let run;
+    try { run = await getJSON(`/runs/${encodeURIComponent(runId)}`); } catch (e) { continue; }
+    if (run.state !== "pending") return run;
+  }
+  return null;
 }
 const useCase = () => document.getElementById("use-case").value;
 
@@ -343,6 +394,130 @@ function technical(a) {
     el("h4", {}, "Method"), el("p", { class: "muted" }, a.disclaimer));
 }
 
+// ---- Agentic brief -------------------------------------------------------
+const REASON = {
+  llm_disabled: "Factual brief (AI interpretation is not configured).",
+  pending: "Factual brief while the investigator checks the evidence…",
+  cooldown: "Factual brief: the last AI attempt failed; it retries later.",
+  rate_limited: "Factual brief: AI interpretation is paused (hourly limit).",
+  rejected_after_repairs: "Factual brief: the AI draft failed the evidence checks.",
+  llm_error: "Factual brief: the AI provider did not respond.",
+  refusal: "Factual brief: the model declined this request.",
+  internal_error: "Factual brief: the AI run failed.",
+};
+const reasonText = (r) => REASON[r] || (r && r.startsWith("budget") ? "Factual brief: the AI run hit its budget." : "Factual brief.");
+
+function signalCard(id, c, primary) {
+  const ev = c.evidence || [];
+  const btn = el("button", { class: "link", type: "button" }, `Evidence (${ev.length})`);
+  btn.addEventListener("click", () => openDrawer(id, c));
+  return el("article", { class: "sig-card" + (primary ? "" : " secondary"), "data-signal": c.signal_id },
+    el("h4", {}, c.headline),
+    el("p", {}, el("span", { class: "lbl" }, "Found"), c.finding),
+    el("p", {}, el("span", { class: "lbl" }, "Why it matters"), c.relevance),
+    el("p", {}, el("span", { class: "lbl" }, "Next"), el("b", {}, c.action)),
+    c.discovery_question ? el("p", { class: "q" }, `Ask: ${c.discovery_question}`) : null,
+    el("div", { class: "sig-meta" },
+      el("span", { title: "Backend ownership confidence" }, `Ownership: ${c.confidence?.ownership || "—"}`),
+      el("span", { title: "Scan observation time (UTC)" }, `Observed ${shortDate(c.observed?.last)}`),
+      el("span", {}, `${c.signal_name}${c.counts ? " · " + c.counts.services.toLocaleString() + " services" : ""}`),
+      btn));
+}
+
+function renderBrief(box, id, resp, note) {
+  const b = resp.output;
+  if (!b) { box.replaceChildren(el("p", { class: "muted" }, "No brief available.")); return; }
+  const ai = b.kind === "agent";
+  const gen = b.generation || {};
+  const meta = el("div", { class: "gen" },
+    ai ? el("span", { class: "badge ai", title: "Written by the investigator and checked in code against the cited records" }, "AI interpretation · checked")
+       : el("span", { class: resp.state === "pending" ? "badge pending" : "badge" }, resp.state === "pending" ? "Investigating…" : "Factual brief"),
+    el("span", {}, ai ? `${gen.model || ""} · ${b.checks?.issues_repaired ? "repaired " + b.checks.issues_repaired + "× · " : ""}scan ${b.scan_date}` : (note || reasonText(b.fallback_reason || resp.cache))),
+    b.offering && b.use_case ? el("span", {}, `Lens: ${b.offering}`) : null);
+  box.replaceChildren(
+    el("p", { class: "decision", id: "decision" }, b.decision),
+    meta,
+    ...(b.cards || []).map((c, i) => signalCard(id, c, i === 0)),
+    followUps(id, b.follow_up_questions || [], resp.use_case));
+}
+
+function followUps(id, questions, uc) {
+  const box = el("div", { class: "followups" });
+  const answers = el("div", { class: "answers" });
+  const input = el("input", { type: "text", name: "question", placeholder: "Ask about this account", maxlength: "300", "aria-label": "Ask about this account" });
+  const form = el("form", { class: "ask-form" }, input, el("button", { type: "submit" }, "Ask"));
+  const ask = async (q) => {
+    if (!q || q.length < 3) return;
+    const seq = state.detailSeq;
+    const slot = el("div", { class: "answer" }, el("div", { class: "who" }, q), el("p", { class: "muted" }, "Investigating…"));
+    answers.prepend(slot);
+    let resp;
+    try { resp = await postJSON("/ask", { account_id: id, use_case: uc || null, question: q }); }
+    catch (e) { slot.lastChild.textContent = `Could not ask: ${e.message}`; return; }
+    if (resp.state === "pending") { const run = await pollRun(resp.run_id, seq); if (!run) { slot.lastChild.textContent = "Still working; ask again shortly."; return; } resp = run; }
+    const out = resp.output;
+    if (!out) { slot.lastChild.textContent = "No answer available."; return; }
+    const evBtn = (out.evidence || []).length ? el("button", { class: "link", type: "button" }, `Evidence (${out.evidence.length})`) : null;
+    evBtn?.addEventListener("click", () => openDrawer(id, { headline: q, evidence: out.evidence, signal_id: out.signal_id }));
+    slot.replaceChildren(el("div", { class: "who" }, q, out.kind === "agent" ? " · AI, checked" : " · factual"), el("p", {}, out.answer), evBtn);
+  };
+  form.addEventListener("submit", (ev) => { ev.preventDefault(); const q = input.value.trim(); input.value = ""; ask(q); });
+  box.append(el("h3", {}, "Ask a follow-up"),
+    el("div", { class: "chips" }, questions.map((q) => { const b = el("button", { class: "chip", type: "button" }, q); b.addEventListener("click", () => ask(q)); return b; })),
+    form, answers);
+  return box;
+}
+
+async function loadBrief(id, box, seq) {
+  const uc = useCase();
+  box.replaceChildren(el("p", { class: "muted" }, "Loading brief…"));
+  let resp;
+  try { resp = await postJSON("/briefs", { account_id: id, use_case: uc || null }); }
+  catch (e) { if (seq === state.detailSeq) box.replaceChildren(el("p", { class: "muted" }, `Brief unavailable (${e.message}); the full report below still applies.`)); return; }
+  if (seq !== state.detailSeq) return;
+  renderBrief(box, id, resp);
+  if (resp.state !== "pending") return;
+  const run = await pollRun(resp.run_id, seq);
+  if (seq !== state.detailSeq) return;
+  if (!run) { box.querySelector(".gen .badge").textContent = "Factual brief"; return; }
+  if (run.stale) { renderBrief(box, id, resp, "Evidence changed during the run; showing the factual brief."); return; }
+  renderBrief(box, id, { ...run, use_case: uc || null, output: run.output || resp.output });
+}
+
+function semanticRecord(e) {
+  const s = e.service;
+  return el("div", { class: "card" },
+    statement("fact", "Observed", e.observed_fact),
+    e.counted ? null : el("p", { class: "muted" }, `Counted once, under ${signalName(e.suppressed_by) || "a stronger finding"} on the same service.`),
+    el("dl", { class: "kv" },
+      el("dt", {}, "Service"), el("dd", {}, `${s.ip}:${s.port}/${s.transport}${s.sni ? " · TLS name " + s.sni : ""}`),
+      el("dt", {}, "Observed"), el("dd", {}, e.observed_at ? e.observed_at + " (UTC)" : "—"),
+      el("dt", {}, "Product"), el("dd", {}, [s.product, s.version].filter(Boolean).join(" ") || "—"),
+      el("dt", {}, "Linked by"), el("dd", {}, [`tier ${e.attribution_tier}`, `confidence ${fmt(e.attribution_confidence)}`,
+        (e.attribution_reasons || []).join(", "), (e.attribution_domains || []).slice(0, 3).join(", ")].filter(Boolean).join(" · ")),
+      el("dt", {}, "Observation"), el("dd", {}, el("code", {}, e.observation_id)),
+      el("dt", {}, "SHA-256"), el("dd", {}, el("code", {}, e.record_sha256 || "—"))));
+}
+
+async function openDrawer(id, card) {
+  const drawer = document.getElementById("drawer"), body = document.getElementById("drawer-body");
+  document.getElementById("drawer-title").textContent = card.headline || "Evidence";
+  drawer.hidden = false;
+  body.replaceChildren(el("p", { class: "muted" }, "Loading cited records…"));
+  const ids = (card.evidence || []).map((e) => e.observation_id);
+  const p = new URLSearchParams({ account_id: id });
+  ids.forEach((x) => p.append("ids", x));
+  if (card.signal_id) p.set("signal_id", card.signal_id);
+  try {
+    const r = ids.length ? await getJSON(`/semantic/evidence?${p}`) : { items: [] };
+    const all = el("div", { class: "records" });
+    const more = card.signal_id ? el("button", { class: "secondary", type: "button" }, `All records for this finding${card.counts ? " (" + card.counts.evidence_rows + ")" : ""}`) : null;
+    more?.addEventListener("click", async () => { more.remove(); try { await loadRecords(id, card.signal_id, all, 0); } catch (e) { all.append(el("p", { class: "muted" }, e.message)); } });
+    body.replaceChildren(el("p", { class: "muted" }, `${r.items.length} cited record${r.items.length === 1 ? "" : "s"} from the scan.`),
+      ...r.items.map(semanticRecord), more, all);
+  } catch (e) { body.replaceChildren(el("p", { class: "muted" }, `Could not load evidence: ${e.message}`)); }
+}
+
 async function showAccount(id) {
   state.selected = id;
   for (const tr of document.querySelectorAll("#rows tr")) tr.classList.toggle("selected", tr.dataset.id === id);
@@ -355,6 +530,7 @@ async function showAccount(id) {
   catch (e) { if (seq === state.detailSeq) panel.replaceChildren(el("p", { class: "empty" }, `Could not load account: ${e.message}`)); return; }
   if (seq !== state.detailSeq) return;
   const b = a.brief, c = b.counts, p = b.pitch;
+  const briefBox = el("section", { id: "ai-brief", "aria-label": "Signal brief" });
   panel.replaceChildren(...[
     el("h2", {}, a.account_name || a.account_id),
     el("p", { class: "muted" }, [a.account_kind === "domain" ? "Domain" : "Organisation",
@@ -362,6 +538,7 @@ async function showAccount(id) {
       `Ownership: ${b.ownership.label}`].filter(Boolean).join(" · ")),
     el("div", { class: "status-bar" }, stateChip(b.research_state), el("span", {}, b.research_state.summary)),
     el("p", { class: "rank", id: "priority-line" }, b.priority.summary),
+    briefBox,
 
     section("Summary", el("p", { class: "lead" }, b.summary)),
 
@@ -402,6 +579,7 @@ async function showAccount(id) {
       technical(a),
       el("details", { class: "bucket" }, el("summary", {}, el("b", {}, "Data source")), el("p", {}, b.source))),
   ].flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false));
+  loadBrief(a.account_id, briefBox, seq);
   if (window.matchMedia("(max-width: 900px)").matches) panel.scrollIntoView({ behavior: "smooth" });
 }
 
@@ -449,6 +627,8 @@ async function init() {
   document.getElementById("prev").addEventListener("click", () => { state.offset = Math.max(0, state.offset - PAGE); loadAccounts(); });
   document.getElementById("next").addEventListener("click", () => { state.offset += PAGE; loadAccounts(); });
   window.addEventListener("hashchange", fromHash);
+  document.getElementById("drawer-close").addEventListener("click", () => { document.getElementById("drawer").hidden = true; });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") document.getElementById("drawer").hidden = true; });
   await loadAccounts();
   fromHash();
 }

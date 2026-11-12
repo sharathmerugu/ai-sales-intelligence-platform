@@ -24,6 +24,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from pydantic import BaseModel, Field
 
 from firmable.logs import log
 
@@ -31,6 +32,12 @@ from firmable.accounts.use_cases import USE_CASES, USE_CASES_BY_ID
 from firmable.api.brief import build_brief, main_finding, priority_sentence, research_state_ref
 from firmable.api.store import SERVING_VERSION, Store
 from firmable.api.wording import render_fact
+from firmable.agent.config import AgentConfig
+from firmable.agent.llm import LLMClient
+from firmable.agent.runs import RunStore
+from firmable.agent.service import MAX_QUESTION_CHARS, BriefService
+from firmable.semantic import SemanticLayer
+from firmable.semantic.models import dump
 
 ENV_DB = "FIRMABLE_SERVING_DB"
 ENV_AUTH = "FIRMABLE_BASIC_AUTH"            # "user:password"; protects every route but /health
@@ -242,6 +249,30 @@ def _client_key(request: Request, mode: str) -> str:
     return request.client.host if request.client else "unknown"
 
 
+class BriefRequest(BaseModel):
+    account_id: str = Field(max_length=300)
+    use_case: UseCaseId | None = None
+    refresh: bool = Field(False, description="regenerate even if a checked brief is cached (rate limited)")
+
+
+class AskRequest(BaseModel):
+    account_id: str = Field(max_length=300)
+    use_case: UseCaseId | None = None
+    question: str = Field(min_length=3, max_length=MAX_QUESTION_CHARS)
+    signal_id: str | None = Field(None, max_length=8)
+
+
+def _principal(request: Request, authenticated: bool) -> str:
+    """Who is asking, for access scope: the Basic-auth user name when auth is on, else `anonymous`."""
+    if not authenticated:
+        return "anonymous"
+    try:
+        user = base64.b64decode(request.headers.get("authorization", "").partition(" ")[2]).split(b":", 1)[0]
+        return user.decode("utf-8", "replace") or "anonymous"
+    except (binascii.Error, ValueError):
+        return "anonymous"
+
+
 def _authorized(request: Request, expected: bytes) -> bool:
     header = request.headers.get("authorization", "")
     scheme, _, value = header.partition(" ")
@@ -260,6 +291,8 @@ def create_app(
     require_auth: bool | None = None,
     rate_limit_per_minute: int | None = None,
     rate_limit_key: str | None = None,
+    agent_config: AgentConfig | None = None,
+    llm_client: LLMClient | None = None,
 ) -> FastAPI:
     """Build the API over the serving DB at `db_path` (default: $FIRMABLE_SERVING_DB).
 
@@ -267,6 +300,8 @@ def create_app(
     /health. `require_auth` (default $FIRMABLE_REQUIRE_AUTH == "1") refuses to start without it.
     `rate_limit_per_minute` (default $FIRMABLE_RATE_LIMIT_PER_MIN) limits each key of
     `rate_limit_key` (default $FIRMABLE_RATE_LIMIT_KEY or `peer`; see `_client_key`).
+    `agent_config` (default `AgentConfig.from_env()`) configures the interpretation agent; `llm_client`
+    replaces its model client (tests).
     """
     if db_path is None:
         db_path = os.environ.get(ENV_DB)
@@ -292,9 +327,13 @@ def create_app(
     store = Store(db_path, memory_limit=os.environ.get(ENV_DUCKDB_MEMORY) or None,
                   threads=int(os.environ.get(ENV_DUCKDB_THREADS) or 0) or None)
 
+    if agent_config is None:
+        agent_config = AgentConfig.from_env()
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
+        service.close()
         store.close()
 
     app = FastAPI(
@@ -314,6 +353,20 @@ def create_app(
     signal_names = {k: r["name"] for k, r in registry.items()}
     snapshot_id = store.meta()["snapshot_id"]
     sizes = store.population_sizes()
+    semantic = SemanticLayer(store)
+    service = BriefService(semantic, agent_config, RunStore(agent_config.app_db), client=llm_client)
+    app.state.semantic = semantic
+    app.state.briefs = service
+    profile = semantic.snapshot.profile
+
+    def scope_of(request: Request) -> str:
+        return f"{profile}:{_principal(request, expected is not None)}"
+
+    def _account_or_404(account_id: str, use_case: str | None = None):
+        a = semantic.get_account(account_id, use_case)
+        if a is None:
+            raise HTTPException(status_code=404, detail="account not found")
+        return a
 
     @app.middleware("http")
     async def access_controls(request: Request, call_next):
@@ -464,6 +517,90 @@ def create_app(
         body["labels"] = LABELS
         body["disclaimer"] = DISCLAIMER
         return body
+
+    # -- semantic layer: typed business objects (docs/agentic-briefs.md §2) -------------------
+
+    @app.get("/semantic/snapshot")
+    def semantic_snapshot() -> dict[str, Any]:
+        return dump(semantic.snapshot)
+
+    @app.get("/semantic/account")
+    def semantic_account(account_id: str = Query(..., max_length=300), use_case: UseCaseId | None = None) -> Any:
+        return dump(_account_or_404(account_id, use_case))
+
+    @app.get("/semantic/signals")
+    def semantic_signals(account_id: str = Query(..., max_length=300), use_case: UseCaseId | None = None,
+                         limit: int = Query(20, ge=1, le=50), offset: int = Query(0, ge=0)) -> Any:
+        page = semantic.list_signals(account_id, use_case, limit, offset)
+        if page is None:
+            raise HTTPException(status_code=404, detail="account not found")
+        return dump(page)
+
+    @app.get("/semantic/evidence")
+    def semantic_evidence(account_id: str = Query(..., max_length=300),
+                          signal_id: str | None = Query(None, max_length=8),
+                          ids: list[str] = Query(default_factory=list, max_length=20,
+                                                 description="observation ids (as cited on a brief card)"),
+                          limit: int = Query(10, ge=1, le=50), offset: int = Query(0, ge=0)) -> Any:
+        a = _account_or_404(account_id)
+        if ids:
+            items = semantic.evidence_by_ids(a.account_id, ids[:20])
+            if signal_id:
+                items = [e for e in items if e.signal_id == signal_id]
+            return {"account_id": a.account_id, "snapshot_id": semantic.snapshot.snapshot_id, "signal_id": signal_id,
+                    "requested": len(ids), "items": [dump(e) for e in items], "labels": LABELS}
+        page = semantic.get_signal_evidence(a.account_id, signal_id, limit=limit, offset=offset)
+        return {**dump(page), "labels": LABELS}
+
+    @app.get("/semantic/priority")
+    def semantic_priority(account_id: str = Query(..., max_length=300), use_case: UseCaseId | None = None) -> Any:
+        p = semantic.explain_priority(account_id, use_case)
+        if p is None:
+            raise HTTPException(status_code=404, detail="account not found")
+        return dump(p)
+
+    @app.get("/semantic/playbooks")
+    def semantic_playbooks() -> dict[str, Any]:
+        return {"items": [dump(semantic.get_seller_playbook(u.id)) for u in USE_CASES]}
+
+    @app.get("/semantic/playbooks/{use_case}")
+    def semantic_playbook(use_case: UseCaseId) -> Any:
+        return dump(semantic.get_seller_playbook(use_case))
+
+    # -- agentic interpretation (docs/agentic-briefs.md §3-6) -------------------------------
+
+    @app.get("/agent/config")
+    def agent_config_view() -> dict[str, Any]:
+        return service.config.public()
+
+    @app.post("/briefs")
+    def create_brief(body: BriefRequest, request: Request) -> Any:
+        try:
+            return service.request(kind="brief", account_id=body.account_id, use_case=body.use_case,
+                                   scope=scope_of(request), refresh=body.refresh)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="account not found") from None
+
+    @app.post("/ask")
+    def ask(body: AskRequest, request: Request) -> Any:
+        if body.signal_id is not None and body.signal_id not in registry:
+            raise HTTPException(status_code=422, detail="unknown signal_id")
+        try:
+            return service.request(kind="ask", account_id=body.account_id, use_case=body.use_case,
+                                   scope=scope_of(request), question=body.question, signal_id=body.signal_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="account not found") from None
+
+    @app.get("/runs/{run_id}")
+    def get_run(run_id: str, request: Request, trace: bool = Query(False)) -> Any:
+        run = service.get_run(run_id, scope_of(request), include_trace=trace)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        return run
+
+    @app.get("/agent/runs")
+    def agent_runs(request: Request, limit: int = Query(50, ge=1, le=200)) -> dict[str, Any]:
+        return {"items": service.runs.list_runs(scope_of(request), limit)}
 
     return app
 

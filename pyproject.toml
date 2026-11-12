@@ -10,6 +10,7 @@ dependencies = [
     "publicsuffixlist>=1.1.2.20261109",
     "fastapi>=0.162.2",
     "uvicorn[standard]>=0.54.0",
+    "anthropic>=2.8.0",
 ]
 
 [project.scripts]

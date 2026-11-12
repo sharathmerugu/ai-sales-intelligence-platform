@@ -474,6 +474,47 @@ class Store:
             [account_id],
         )
 
+    # -- semantic-layer helpers (read only; docs/agentic-briefs.md) ---------------
+
+    def meta_full(self) -> dict[str, Any]:
+        """Every `meta` column (snapshot, serving / wording / use-case versions, profile, built_at)."""
+        return self._query("SELECT * FROM meta")[0]
+
+    def signal_coverage(self, account_id: str) -> dict[str, dict[str, Any]]:
+        """Per signal of one account: evidence rows, counted / suppressed rows, observation dates and a
+        content digest of the observation ids (cache invalidation)."""
+        rows = self._query(
+            """SELECT signal_id, count(*) AS n_rows, count_if(counted) AS n_counted,
+                      count_if(NOT counted) AS n_suppressed, min(observed_at) AS first_observed,
+                      max(observed_at) AS last_observed, bit_xor(hash(observation_id)) AS ids_digest
+               FROM account_evidence WHERE account_id = ? GROUP BY signal_id ORDER BY signal_id""",
+            [account_id])
+        return {r["signal_id"]: r for r in rows}
+
+    def evidence_by_ids(self, account_id: str, observation_ids: list[str],
+                        signal: str | None = None) -> list[dict[str, Any]]:
+        """Evidence rows of one account with the given observation ids (same columns as `account_evidence`).
+        Ids that belong to another account return nothing."""
+        if not observation_ids:
+            return []
+        cols = ", ".join(f"e.{c}" for c in quote_columns(EVIDENCE_COLUMNS).split(", "))
+        params: list[Any] = [account_id, list(observation_ids)]
+        extra = ""
+        if signal:
+            extra = " AND e.signal_id = ?"
+            params.append(signal)
+        return self._query(
+            f"""SELECT {cols}, r.name AS signal_name, r.observed_fact_template, r.inferred_risk, r.hypothesis
+                FROM account_evidence e LEFT JOIN signal_registry r ON r.id = e.signal_id
+                WHERE e.account_id = ? AND list_contains(?::VARCHAR[], e.observation_id){extra}
+                ORDER BY e.signal_id, e.counted DESC, e.ip, e.port, e.transport, e.sni, e.service_id""", params)
+
+    def product_vocabulary(self) -> list[str]:
+        """Every product / detail label any account carries: the vocabulary a brief may not name unless the
+        account itself carries it."""
+        rows = self._query("SELECT DISTINCT unnest(details) AS d FROM account_signals WHERE details IS NOT NULL")
+        return sorted({r["d"] for r in rows if r["d"]})
+
     def account_evidence(
         self, account_id: str, signal: str | None = None, limit: int = 50, offset: int = 0
     ) -> tuple[int, list[dict[str, Any]]]:
