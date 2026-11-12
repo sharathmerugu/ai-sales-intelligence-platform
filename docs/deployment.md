@@ -74,10 +74,22 @@ Rollback to the previous deployment: check out `fd7c671` and run `scripts/stage_
 public DB). Rollback to attribution v4: tag `scoring-v3-deployed` (`5be744f`) with the backed-up
 `~/firmable-work/serving/2026-11-07.public.scoring-v3-attr-v4.duckdb` copied over the public DB.
 
-## Agentic briefs (branch `feat/agentic-briefs`, not deployed)
+## Agentic briefs (deployed 2026-11-13, commit `2570640`)
 
-The image needs no change to serve the new endpoints: with `FIRMABLE_LLM_PROVIDER` unset the page shows the
-deterministic cards. To turn the agent on in Railway (requires authorization; not done):
+Deployed with `scripts/stage_deploy.sh 2026-11-07`: same public DB (SHA-256 `4a901c139f31…`, serving v4,
+unchanged) plus `deploy/briefs.sqlite` (9 published agent runs from the 2026-11-13 free-tier generation, 5
+passing checks v2; no secrets: checked for key patterns). No `FIRMABLE_LLM_PROVIDER` and no model key on Railway:
+production serves stored briefs (`cache: "pregenerated"`) and deterministic cards, and makes no model calls.
+Verified on production: `/agent/config` reports `provider: none, pregenerated: true`; stored briefs return
+`ready / pregenerated`; a brief rejected by checks v2 falls back; unauthenticated `POST /briefs` is 401; e2e
+25 / 25 (desktop and mobile). Rollback: check out `27afd96` and run `scripts/stage_deploy.sh 2026-11-07` (same
+public DB; the serving version did not change). To add newly generated briefs, rerun `agent-pregenerate` and
+redeploy.
+
+Turning on live generation later:
+
+With `FIRMABLE_LLM_PROVIDER` unset the page shows stored and deterministic cards. To turn the agent on in
+Railway (requires authorization; not done):
 `railway variable set ANTHROPIC_API_KEY --stdin` and `FIRMABLE_LLM_PROVIDER=anthropic`; mount a volume
 and set `FIRMABLE_APP_DB=/data/agent-runs.sqlite` so runs and cached briefs survive restarts (the default is
 in memory). Keep one replica: the job pool and SQLite are per process. Details: `docs/agentic-briefs.md`.

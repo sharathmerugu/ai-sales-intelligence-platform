@@ -164,7 +164,7 @@ deterministic cards. The run is resumable; anything already stored is skipped.
 - Generate from the **public** DB (the CLI default): the digest includes the DB profile, so briefs made
   from the internal DB do not match the deployed app.
 - `scripts/stage_deploy.sh` copies the file to `deploy/briefs.sqlite`; the image sets
-  `FIRMABLE_PREGENERATED_DB` to it. Not deployed.
+  `FIRMABLE_PREGENERATED_DB` to it. Deployed 2026-11-13 (commit `2570640`): see `docs/deployment.md`.
 
 ```bash
 OLLAMA_CONTEXT_LENGTH=16384 ollama serve &          # prompts reach ~8k tokens; small defaults truncate
@@ -272,7 +272,8 @@ a publication protocol that SQLite and local renames do not provide.
   invoice.
 - Scope = Basic-auth user name; the deployment has one shared credential, so all reviewers share a cache.
 - The image's default run store is in memory (lost on restart); a Railway volume or Postgres is needed for
-  durable runs. **Not deployed:** the live app still runs `cf8e58a`.
+  durable runs. Deployed 2026-11-13 with no provider configured: production serves the 5 stored briefs and the
+  deterministic cards; it makes no model calls and holds no model key.
 - Playbooks are two approved use cases plus a general reading; other lenses use the general playbook.
 - Numbers are checked for membership in the values the backend holds for that card (signal counts, account
   counts, ranks, ports, scan date), not bound to the quantity they describe: "5 services" passes when 5 is,
